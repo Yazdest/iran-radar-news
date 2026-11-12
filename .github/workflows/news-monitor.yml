@@ -1,4 +1,5 @@
-name: Iran Radar News Collector
+
+name: Iran Radar News Collector and Publisher
 
 on:
   workflow_dispatch:
@@ -13,9 +14,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  collect:
+  collect-and-publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
@@ -32,8 +33,7 @@ jobs:
         with:
           path: state/seen.json
           key: iran-radar-state-${{ github.run_id }}
-          restore-keys: |
-            iran-radar-state-
+          restore-keys: iran-radar-state-
 
       - name: Install dependencies
         run: pip install -r requirements.txt
@@ -43,6 +43,13 @@ jobs:
           APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
           APPS_SCRIPT_SECRET: ${{ secrets.APPS_SCRIPT_SECRET }}
         run: python news_collector.py
+
+      - name: Publish verified news to Telegram
+        env:
+          APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
+          APPS_SCRIPT_SECRET: ${{ secrets.APPS_SCRIPT_SECRET }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: python publisher.py
 
       - name: Save deduplication state
         if: always()
