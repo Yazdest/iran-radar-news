@@ -16,27 +16,34 @@ jobs:
   collect:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: pip
+
       - name: Restore deduplication state
         uses: actions/cache/restore@v4
         with:
           path: state/seen.json
           key: iran-radar-state-${{ github.run_id }}
-          restore-keys: iran-radar-state-
+          restore-keys: |
+            iran-radar-state-
+
       - name: Install dependencies
         run: pip install -r requirements.txt
+
       - name: Collect Iran-related news
         env:
           APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
           APPS_SCRIPT_SECRET: ${{ secrets.APPS_SCRIPT_SECRET }}
         run: python news_collector.py
+
       - name: Save deduplication state
         if: always()
         uses: actions/cache/save@v4
