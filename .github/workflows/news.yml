@@ -3,7 +3,7 @@ name: Radar News
 on:
   workflow_dispatch:
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '*/5 * * * *'
 
 permissions:
   contents: read
@@ -46,12 +46,12 @@ jobs:
           fi
           ls fonts || true
 
-      - name: Run (checks all sources every 30s for 17 minutes)
+      - name: Run (checks all sources every 30s for 4 minutes)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          RUN_MINUTES: '17'
+          RUN_MINUTES: '4'
           POLL_SECONDS: '30'
         run: python -u main.py
 
