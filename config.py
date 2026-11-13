@@ -25,7 +25,6 @@ BOOTSTRAP = _env("BOOTSTRAP", "1") == "1"              # first ever run: mark cu
 DRY_RUN = _env("DRY_RUN", "0") == "1"                  # print posts instead of sending
 SHOW_ARTICLE_LINK = _env("SHOW_ARTICLE_LINK", "0") == "1"  # add a link to the original article (RSS only)
 STATE_FILE = _env("STATE_FILE", "state/seen.json")
-DEFAULT_TAGS = "#ایران"
 
 # ---------- sources ----------
 _GN = "https://news.google.com/rss/search?q={q}+when:1d&hl=en-US&gl=US&ceid=US:en"
@@ -41,9 +40,18 @@ RSS_FEEDS = [
     {"name": "CNN", "fa": "سی‌ان‌ان", "url": "http://rss.cnn.com/rss/edition_meast.rss"},
     # Reuters / AP no longer publish RSS: Google News search is used, only headlines are available.
     {"name": "Reuters", "fa": "رویترز", "gnews": True, "strip": "Reuters",
-     "url": _GN.format(q="Iran+site:reuters.com")},
+     "url": _GN.format(q="(Iran+OR+Israel)+site:reuters.com")},
     {"name": "AP", "fa": "آسوشیتدپرس", "gnews": True, "strip": "AP News",
-     "url": _GN.format(q="Iran+site:apnews.com")},
+     "url": _GN.format(q="(Iran+OR+Israel)+site:apnews.com")},
+    {"name": "Bloomberg", "fa": "بلومبرگ", "gnews": True, "strip": "Bloomberg",
+     "url": _GN.format(q="(Iran+OR+Israel)+site:bloomberg.com")},
+    # Israel / region outlets (if one URL stops working it only logs a WARN)
+    {"name": "Times of Israel", "fa": "تایمز اسرائیل", "url": "https://www.timesofisrael.com/feed/"},
+    {"name": "Jerusalem Post", "fa": "جروزالم‌پست", "url": "https://www.jpost.com/rss/rssfeedsheadlines.aspx"},
+    {"name": "Ynet", "fa": "وای‌نت", "url": "https://www.ynetnews.com/Integration/StoryRss3082.xml"},
+    {"name": "Haaretz", "fa": "هاآرتص", "url": "https://www.haaretz.com/srv/haaretz-latest-headlines"},
+    {"name": "Middle East Eye", "fa": "میدل‌ایست‌آی", "url": "https://www.middleeasteye.net/rss"},
+    {"name": "Al-Monitor", "fa": "المانیتور", "url": "https://www.al-monitor.com/rss"},
 ]
 
 # Public Telegram channels (read through https://t.me/s/<channel>).
@@ -61,7 +69,22 @@ _TERMS = [
     "نطنز", "فردو", "خلیج فارس", "تنگه هرمز", "سپاه", "جمهوری اسلامی", "خامنه‌ای", "پزشکیان", "عراقچی",
     "إيران", "طهران", "الحرس الثوري", "مضيق هرمز",
 ]
-IRAN_RE = re.compile(r"(?<!\w)(?:%s)(?!\w)" % "|".join(re.escape(t) for t in _TERMS), re.I)
+_ISRAEL_TERMS = [
+    "israel", "israeli", "israelis", "idf", "israel defense forces", "gaza", "hamas", "hezbollah",
+    "netanyahu", "tel aviv", "west bank", "knesset", "mossad", "houthi", "houthis",
+    "اسرائیل", "اسرائیلی", "غزه", "حماس", "حزب‌الله", "حزب الله", "نتانیاهو", "تل‌آویو", "تل آویو",
+    "کرانه باختری", "موساد", "کنست", "حوثی", "حوثی‌ها",
+    "إسرائيل", "غزة", "نتنياهو", "الحوثي",
+]
+
+
+def _rx(terms):
+    return re.compile(r"(?<!\w)(?:%s)(?!\w)" % "|".join(re.escape(t) for t in terms), re.I)
+
+
+IRAN_RE = _rx(_TERMS)
+ISRAEL_RE = _rx(_ISRAEL_TERMS)
+RELEVANT_RE = _rx(_TERMS + _ISRAEL_TERMS)   # what a news item must match to be published
 
 # Used only by the offline fallback (no AI key); the AI classifies by itself.
 BREAKING_RE = re.compile(
