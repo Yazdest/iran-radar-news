@@ -48,19 +48,20 @@ def build_html(post: Post, item: Item) -> str:
     parts = [f"{head}\n\n<b>{e(post.title)}</b>" if post.title else head]
     if post.translation_unavailable:
         parts.append("⚠️ ترجمه در دسترس نیست؛ متن اصلی منتشر شده است.")
+
     clean_body = translator._clean_source_formatting(post.body)
+    # WFWitness is the sole Telegram source whose plain identifier is public.
+    # Keep it inline at the end of the news paragraph, exactly as requested.
+    if item.source.casefold().lstrip("@") == "wfwitness":
+        clean_body = f"{clean_body} | منبع: wfwitness" if clean_body else "منبع: wfwitness"
     if clean_body:
         parts.append(e(clean_body))
-    # Standard, consistent channel identity and a natural follow invitation.
-    parts.append(f"📢 <b>رادار ایران</b> | {e(config.SIGNATURE or '@RadarIranNews')}\nبرای اطلاع از آخرین اخبار و تحولات، رادار ایران را دنبال کنید.")
-    # Requested source credits are placed in one dedicated footer, never left in body text.
-    source_credit = {"entekhab_ir": "انتخاب", "eskannews_com": "اسکان نیوز"}.get(item.source.casefold().lstrip("@"), "")
-    if source_credit:
-        parts.append(f"<b>رسانه:</b> {e(source_credit)}")
-    # Public attribution exception: show only the plain channel ID for WFWitness.
-    # Do not include @, a clickable URL, or a source label.
-    if item.source.casefold().lstrip("@") == "wfwitness":
-        parts.append("wfwitness")
+
+    # The follow invitation is above the channel identity, both after the news.
+    parts.append(
+        "برای اطلاع از آخرین اخبار و تحولات، ما را دنبال کنید.\n"
+        f"📡 <b>رادار ایران</b> | {e(config.SIGNATURE or '@RadarIranNews')}"
+    )
     return "\n\n".join(parts)
 
 
