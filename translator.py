@@ -1,4 +1,4 @@
-"""Concise, independent Persian rewrite for the seven-source IRAN RADAR channel."""
+"""Concise, independent Persian rewrite for the eight-source IRAN RADAR channel."""
 from __future__ import annotations
 
 import json
@@ -43,6 +43,8 @@ READING TIME — the reader should understand the main point in about 5–6 seco
 - body: normally one short sentence, at most two; target 100–220 characters. For a major breaking event, up to 300 characters.
 - no introduction, history lesson, long storytelling, repeated headline, filler, or decorative conclusion.
 - preserve the key actor, action, location, time and important numbers when present. Keep uncertainty and attribution that belong to the claim (e.g. «به گفته ارتش اسرائیل»); never turn an allegation into established fact.
+- CRITICAL: Preserve every named news organization, news agency, newspaper, broadcaster, and research/reporting institution explicitly mentioned in the original (Iranian or foreign), including the exact name and its attribution. Examples include Reuters, AP, AFP, Bloomberg, IRNA, ISNA, Tasnim, Al Jazeera and similar outlets. If the original says «رویترز به نقل از دو مقام آمریکایی گزارش داد»، the rewritten post must still identify Reuters and retain the attribution; do not generalize it to «رسانه‌ها گزارش دادند» or delete it for brevity. Keep these editorial/news-outlet names distinct from the Telegram source channel.
+- The ONLY source-channel exception is WFWitness: its plain identifier is appended by the publisher. Never mention any other Telegram source channel.
 - Do not invent facts, explanations, motives, or consequences. If the text is too vague to make a clear short post, return {"kind":"skip"}.
 
 CLASSIFICATION — return exactly one JSON object:
@@ -53,7 +55,7 @@ CLASSIFICATION — return exactly one JSON object:
 - news: other relevant developments.
 - impact high only for major military escalation, consequential decisions, major diplomatic moves or important economic shocks.
 
-HASHTAGS and source labels are added by the publisher. Do not put a hashtag, source/channel name, link or emoji in title/body. emoji must be exactly one suitable emoji, not 🚨 and not a flag.
+Hashtags and the Telegram source-channel identifier are handled by the publisher. Do not add Telegram channel names, usernames, links, or source-channel labels to title/body. This restriction does NOT apply to named news agencies, media organizations, newspapers, broadcasters, or institutions cited in the original: preserve those names and their attribution in the rewritten body. emoji must be exactly one suitable emoji, not 🚨 and not a flag.
 
 STYLE: idiomatic, concise, formal Persian; correct نیم‌فاصله, Persian digits and punctuation. If the input is already Persian, rewrite it fully under these rules rather than merely correcting spelling. Remove ads, subscription prompts, signatures, channel IDs, hashtags and promotional footers. If nothing newsworthy remains, return {"kind":"skip"}."""
 
