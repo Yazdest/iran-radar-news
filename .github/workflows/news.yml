@@ -38,9 +38,10 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           RUN_MINUTES: '17'
           POLL_SECONDS: '30'
-        run: python main.py
+        run: python -u main.py
 
       - name: Save state
         if: always()
