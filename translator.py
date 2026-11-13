@@ -1,4 +1,4 @@
-"""Fluent Persian news copy: Claude when ANTHROPIC_API_KEY is set, free Google translate as fallback."""
+"""Fluent Persian news copy: Claude (paid) or Gemini (free tier), then plain Google translate as last fallback."""
 from __future__ import annotations
 
 import json
@@ -75,13 +75,35 @@ def _claude(item: Item) -> Post | None:
             time.sleep(2 * (attempt + 1))
             continue
         r.raise_for_status()
-        raw = "".join(b.get("text", "") for b in r.json().get("content", []))
-        m = re.search(r"\{.*\}", raw, re.S)
-        data = json.loads(m.group(0))
-        if data.get("kind") == "skip":
-            return None
-        return _finish(str(data.get("kind", "news")), str(data.get("title", "")), str(data.get("body", "")))
+        return _parse("".join(b.get("text", "") for b in r.json().get("content", [])))
     raise RuntimeError("Claude API unavailable")
+
+
+def _parse(raw: str) -> Post | None:
+    data = json.loads(re.search(r"\{.*\}", raw, re.S).group(0))
+    if data.get("kind") == "skip":
+        return None
+    return _finish(str(data.get("kind", "news")), str(data.get("title", "")), str(data.get("body", "")))
+
+
+# ------------------------------------------------------------ Gemini (free tier)
+def _gemini(item: Item) -> Post | None:
+    content = f"Source: {item.source}\nTitle: {item.title}\nText: {item.text or '(none)'}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{config.GEMINI_MODEL}:generateContent"
+    payload = {
+        "systemInstruction": {"parts": [{"text": SYSTEM}]},
+        "contents": [{"role": "user", "parts": [{"text": content}]}],
+        "generationConfig": {"responseMimeType": "application/json", "temperature": 0.3, "maxOutputTokens": 1200},
+    }
+    for attempt in range(3):
+        r = requests.post(url, headers={"x-goog-api-key": config.GEMINI_API_KEY}, json=payload, timeout=40)
+        if r.status_code in (429, 500, 503):
+            time.sleep(4 * (attempt + 1))
+            continue
+        r.raise_for_status()
+        parts = r.json()["candidates"][0]["content"]["parts"]
+        return _parse("".join(p.get("text", "") for p in parts))
+    raise RuntimeError("Gemini API unavailable")
 
 
 # ------------------------------------------------------------ fallback
@@ -111,9 +133,14 @@ def _fallback(item: Item) -> Post:
 
 def make_post(item: Item) -> Post | None:
     """Returns None when the item should not be published."""
+    engines = []
     if config.ANTHROPIC_API_KEY:
+        engines.append(("claude", _claude))
+    if config.GEMINI_API_KEY:
+        engines.append(("gemini", _gemini))
+    for name, fn in engines:
         try:
-            return _claude(item)
+            return fn(item)
         except Exception as exc:
-            print(f"WARN claude translation failed ({exc}); using fallback", file=sys.stderr)
+            print(f"WARN {name} translation failed ({exc}); trying next engine", file=sys.stderr)
     return _fallback(item)
