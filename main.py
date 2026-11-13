@@ -130,8 +130,6 @@ def cycle(state: State) -> bool:
             continue
         raw_pool.append(item.title)
         batch.append(item)
-        if len(batch) >= config.MAX_PER_CYCLE:
-            break
 
     if not batch:
         state.save()
@@ -210,7 +208,7 @@ def main() -> None:
         if once:
             break
 
-        # Poll frequently; each cycle may publish up to MAX_PER_CYCLE stories.
+        # Poll frequently; each cycle processes every eligible non-duplicate story.
         # cycle() spaces multiple successful posts; this outer wait spaces cycles.
         if published:
             last_published_at = time.time()
