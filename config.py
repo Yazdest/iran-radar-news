@@ -13,6 +13,8 @@ CHANNEL = _env("TELEGRAM_CHANNEL", "@RadarIranNews")      # where posts are publ
 SIGNATURE = _env("CHANNEL_SIGNATURE", "@RadarIranNews")    # last line of every post ("" to disable)
 ANTHROPIC_API_KEY = _env("ANTHROPIC_API_KEY")              # for fluent translation
 ANTHROPIC_MODEL = _env("ANTHROPIC_MODEL", "claude-haiku-5-5")
+GEMINI_API_KEY = _env("GEMINI_API_KEY")                    # free key from aistudio.google.com
+GEMINI_MODEL = _env("GEMINI_MODEL", "gemini-2.5-flash")
 
 # ---------- behaviour ----------
 POLL_SECONDS = int(_env("POLL_SECONDS", "30"))        # delay between checks of all sources
