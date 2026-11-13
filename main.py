@@ -151,6 +151,13 @@ def cycle(state: State) -> bool:
                 print(f"ERROR emergency fallback failed for {item.uid}: {exc}", file=sys.stderr)
                 continue
         if post is None:
+            # None is an explicit editorial skip (not a provider/quality failure).
+            # Log it so a successful model call cannot look like a silent publish failure.
+            print(
+                f"INFO NOT_PUBLISHED: editorial skip; source={item.source}; "
+                f"origin={item.origin}; title={item.title!r}",
+                file=sys.stderr,
+            )
             state.mark(item.uid, item)
             state.fails.pop(item.uid, None)
             continue
