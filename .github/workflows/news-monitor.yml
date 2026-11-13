@@ -1,5 +1,5 @@
 
-name: Iran Radar News Collector and Publisher
+name: Iran Radar - News Collection and Publishing
 
 on:
   workflow_dispatch:
@@ -19,7 +19,7 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -33,18 +33,19 @@ jobs:
         with:
           path: state/seen.json
           key: iran-radar-state-${{ github.run_id }}
-          restore-keys: iran-radar-state-
+          restore-keys: |
+            iran-radar-state-
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Collect Iran-related news
+      - name: Collect news from configured sources
         env:
           APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
           APPS_SCRIPT_SECRET: ${{ secrets.APPS_SCRIPT_SECRET }}
         run: python news_collector.py
 
-      - name: Publish verified news to Telegram
+      - name: Translate and publish eligible news
         env:
           APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
           APPS_SCRIPT_SECRET: ${{ secrets.APPS_SCRIPT_SECRET }}
