@@ -1,4 +1,4 @@
-name: Radar News
+name: IRAN RADAR
 
 on:
   workflow_dispatch:
@@ -8,9 +8,8 @@ on:
 permissions:
   contents: read
 
-# Jobs queue instead of overlapping, so the bot is always running (one job hands over to the next).
 concurrency:
-  group: radar-news
+  group: iran-radar-news
   cancel-in-progress: false
 
 jobs:
@@ -25,37 +24,28 @@ jobs:
           python-version: '3.12'
           cache: pip
 
-      - name: Restore state
+      - name: Restore publication and duplicate-detection state
         uses: actions/cache/restore@v4
         with:
           path: state/seen.json
           key: radar-state-${{ github.run_id }}
           restore-keys: radar-state-
 
-      - run: pip install -r requirements.txt
+      - name: Install dependencies
+        run: pip install -r requirements.txt
 
-      - name: Persian font for the images (skipped if fonts/ already holds one)
-        run: |
-          mkdir -p fonts
-          if ! ls fonts/*.ttf >/dev/null 2>&1; then
-            for f in Bold Regular; do
-              curl -fsSL -o "fonts/Vazirmatn-$f.ttf" \
-                "https://raw.githubusercontent.com/rastikerdar/vazirmatn/master/fonts/ttf/Vazirmatn-$f.ttf" \
-                || rm -f "fonts/Vazirmatn-$f.ttf"
-            done
-          fi
-          ls fonts || true
-
-      - name: Run (checks all sources every 30s for 4 minutes)
+      - name: Monitor selected Telegram channels (30-second polling)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_CHANNEL: '@RadarIranNews'
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           RUN_MINUTES: '4'
           POLL_SECONDS: '30'
+          ALLOW_FALLBACK: '0'
         run: python -u main.py
 
-      - name: Save state
+      - name: Save publication and duplicate-detection state
         if: always()
         uses: actions/cache/save@v4
         with:
