@@ -96,7 +96,7 @@ def prepare(item: sources.Item):
         return RETRY
 
 
-def cycle(state: State) -> None:
+def cycle(state: State) -> bool:
     now = datetime.now(timezone.utc)
     items = sources.collect_all()
     new = [item for item in items if item.uid not in state.seen]
@@ -108,7 +108,7 @@ def cycle(state: State) -> None:
         state.fresh = False
         state.save()
         print(f"Bootstrap: {len(items)} existing Telegram posts marked as seen.")
-        return
+        return False
     state.fresh = False
 
     cutoff = now - timedelta(minutes=config.MAX_AGE_MINUTES)
@@ -135,12 +135,13 @@ def cycle(state: State) -> None:
 
     if not batch:
         state.save()
-        return
+        return False
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         posts = list(pool.map(prepare, batch))
 
     new_headlines: list[str] = []
+    published_any = False
     for item, post in zip(batch, posts):
         if post is RETRY:
             # Last-resort source-text publication: model errors must never block the news queue.
@@ -165,6 +166,7 @@ def cycle(state: State) -> None:
 
         try:
             publisher.publish(item, post)
+            published_any = True
             state.mark(item.uid, item)
             state.fails.pop(item.uid, None)
             state.remember_title(item.title)
@@ -176,6 +178,7 @@ def cycle(state: State) -> None:
         state.save()
         time.sleep(0.5)
     state.save()
+    return published_any
 
 
 def main() -> None:
@@ -188,15 +191,34 @@ def main() -> None:
     state = State(config.STATE_FILE)
     once = "--once" in sys.argv
     deadline = time.time() + config.RUN_MINUTES * 60 if config.RUN_MINUTES else None
+    last_published_at: float | None = None
     while True:
+        if deadline and time.time() >= deadline:
+            break
         started = time.time()
+        published = False
         try:
-            cycle(state)
+            published = cycle(state)
         except Exception as exc:
             print(f"ERROR cycle: {exc}", file=sys.stderr)
-        if once or (deadline and time.time() + config.POLL_SECONDS > deadline):
+        if once:
             break
-        time.sleep(max(1, config.POLL_SECONDS - (time.time() - started)))
+
+        # Poll frequently, but never send multiple queued stories in a burst.
+        # After a successful post, wait at least PUBLISH_INTERVAL_SECONDS before
+        # another item can be published; empty cycles keep the regular poll rate.
+        if published:
+            last_published_at = time.time()
+        sleep_for = max(1, config.POLL_SECONDS - (time.time() - started))
+        if last_published_at is not None:
+            remaining = config.PUBLISH_INTERVAL_SECONDS - (time.time() - last_published_at)
+            sleep_for = max(sleep_for, remaining)
+        if deadline:
+            runtime_left = deadline - time.time()
+            if runtime_left <= 1:
+                break
+            sleep_for = min(sleep_for, runtime_left)
+        time.sleep(max(0.1, sleep_for))
 
 
 if __name__ == "__main__":
