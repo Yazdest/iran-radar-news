@@ -1,7 +1,0 @@
-requests>=2.32,<3
-feedparser>=6.0,<7
-beautifulsoup4>=4.12,<5
-Pillow>=10
-arabic-reshaper>=3.0
-python-bidi>=0.4.2
-fonttools>=4.50,<5
