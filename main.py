@@ -138,8 +138,8 @@ def cycle(state: State) -> None:
 def main() -> None:
     if not config.DRY_RUN and not (config.BOT_TOKEN and config.CHANNEL):
         raise SystemExit("TELEGRAM_BOT_TOKEN is missing")
-    if not config.ANTHROPIC_API_KEY:
-        print("NOTE: ANTHROPIC_API_KEY not set -> basic Google translation (lower quality).", file=sys.stderr)
+    if not (config.ANTHROPIC_API_KEY or config.GEMINI_API_KEY):
+        print("NOTE: no ANTHROPIC_API_KEY / GEMINI_API_KEY -> basic Google translation (lower quality).", file=sys.stderr)
     state = State(config.STATE_FILE)
     once = "--once" in sys.argv
     deadline = time.time() + config.RUN_MINUTES * 60 if config.RUN_MINUTES else None
