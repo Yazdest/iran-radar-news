@@ -49,7 +49,7 @@ READING TIME — the reader should understand the main point in about 5–6 seco
 
 CLASSIFICATION — return exactly one JSON object:
 {"kind":"breaking"|"statement"|"assessment"|"news","impact":"high"|"normal","title":"...","body":"...","emoji":"..."}
-- breaking: a genuinely urgent, newly reported attack, strike, explosion, major casualty event or sudden escalation.
+- breaking: every newly reported real-time or unusual military/operational activity, including air-defense or radar activation, air-defense engagement/interception, detection or approach of an unidentified/hostile aircraft or drone, fighter-jet scramble, missile/drone launch, military firing, attack, strike, explosion, or sudden escalation. Even if the cause or identity of the target is unknown, classify the reported live military activity as breaking; do not downgrade it to routine news.
 - statement: a consequential position or announcement by a named Iranian, US or Israeli official.
 - assessment: a clearly attributed assessment or report that has a meaningful implication for the defined scope.
 - news: other relevant developments.
@@ -115,6 +115,34 @@ def _source_outlet(item: Item) -> str:
     return {"entekhab_ir": "انتخاب", "eskannews_com": "اسکان نیوز"}.get(key, "")
 
 
+# Real-time military activity is urgent even when no attack or target is confirmed.
+MILITARY_ACTIVITY_RE = re.compile(
+    r"فعال(?:\s*شدن|\s*شد|\s*شده|\s*شدند|\s*شدنِ|یت)|به\s*کار\s*افتادن|"
+    r"روشن\s*شدن|آماده\s*باش|رهگیری|ردگیری|شناسایی\s*هدف|"
+    r"اعزام\s*جنگنده|پرواز\s*جنگنده|به\s*پرواز\s*درآمدن|"
+    r"(?:air\s*defen[cs]e|air\s*defense\s*systems?|radar\s*systems?).{0,45}"
+    r"(?:activat\w*|engag\w*|track\w*|intercept\w*|scrambl\w*)|"
+    r"(?:activat\w*|engag\w*|track\w*|intercept\w*|scrambl\w*).{0,45}"
+    r"(?:air\s*defen[cs]e|air\s*defense\s*systems?|radar\s*systems?)",
+    re.I,
+)
+
+
+def is_urgent_military_development(text: str) -> bool:
+    """True for combat developments and reported real-time military-system activity."""
+    value = text or ""
+    military_asset = re.search(
+        r"پدافند|دفاع\s*هوایی|سامانه.{0,25}(?:دفاع|پدافند)|رادار|جنگنده|"
+        r"موشک|پهپاد|ناو\b|air\s*defen[cs]e|radar|fighter\s*jet|missile|drone",
+        value, re.I,
+    )
+    combat_event = re.search(
+        r"جنگ|حمله|موشک|پهپاد|پدافند|نظامی|درگیری|عملیات|شلیک|رهگیری|"
+        r"airstrike|missile|military|war|attack|drone|intercept", value, re.I,
+    )
+    return bool(MILITARY_ACTIVITY_RE.search(value) and military_asset or combat_event)
+
+
 def _finish(kind: str, title: str, body: str, impact: str = "normal", source: str = "", emoji: str = "") -> Post:
     kind = kind if kind in KINDS else "news"
     impact = "high" if impact == "high" else "normal"
@@ -131,7 +159,7 @@ def _finish(kind: str, title: str, body: str, impact: str = "normal", source: st
     us_israel = re.search(r"ترامپ|ونس|روبیو|هگست|کاخ سفید|آمریکا|ایالات متحده|نتانیاهو|کاتس|ساعر|ارتش اسرائیل|اسرائیل|واشنگتن|تل.?آویو|\b(trump|vance|rubio|hegseth|white house|united states|u\.?s\.?|israel|netanyahu|katz|idf)\b", combined, re.I)
     iran = re.search(r"ایران|تهران|جمهوری اسلامی|\biran\b|\btehran\b", combined, re.I)
     statement = re.search(r"اظهار|اظهارات|گفت|اعلام|موضع|هشدار|تهدید|بیانیه|انتقاد|تأکید|تصریح|بررسی|\b(said|says|stated|warned|announced|comments?|remarks?|criticized|statement)\b", combined, re.I)
-    military = re.search(r"جنگ|حمله|موشک|پهپاد|پدافند|نظامی|درگیری|عملیات|airstrike|missile|military|war|attack|drone", combined, re.I)
+    military = is_urgent_military_development(combined)
     if military or (us_israel and iran and statement):
         kind = "breaking"
     # Source-channel names are intentionally never part of the AI body.
