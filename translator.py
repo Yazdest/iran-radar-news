@@ -57,7 +57,7 @@ CLASSIFICATION — return exactly one JSON object:
 
 Hashtags and the Telegram source-channel identifier are handled by the publisher. Do not add Telegram channel names, usernames, links, or source-channel labels to title/body. This restriction does NOT apply to named news agencies, media organizations, newspapers, broadcasters, or institutions cited in the original: preserve those names and their attribution in the rewritten body. emoji must be exactly one suitable emoji, not 🚨 and not a flag.
 
-STYLE: idiomatic, concise, formal Persian; correct نیم‌فاصله, Persian digits and punctuation. If the input is already Persian, rewrite it fully under these rules rather than merely correcting spelling. Remove ads, subscription prompts, signatures, channel IDs, hashtags and promotional footers. If nothing newsworthy remains, return {"kind":"skip"}."""
+STYLE: idiomatic, concise, formal Persian; correct نیم‌فاصله, Persian digits and punctuation. Do not copy decorative source emojis, emoji bullets, diamonds, arrows, newspaper icons or repeated emoji markers. If the input is already Persian, rewrite it fully under these rules rather than merely correcting spelling. Remove ads, subscription prompts, signatures, channel IDs, hashtags and promotional footers. If nothing newsworthy remains, return {"kind":"skip"}."""
 
 
 class TranslationUnavailable(Exception):
@@ -82,17 +82,59 @@ def _clean_emoji(value: str) -> str:
     return value if ok else ""
 
 
+_DECORATIVE_LINE_RE = re.compile(r"^\s*(?:[♦◆🔹🔸▪▫◾◽🔻🔺👇👆⬇⬇️⬇️🆔📰📢📣➡️➜➤]+\s*)+$")
+_EMOJI_PREFIX_RE = re.compile(r"^\s*(?:[♦◆🔹🔸▪▫◾◽🔻🔺👇👆⬇⬇️🆔📰📢📣➡️➜➤🚨]+\s*)+")
+_PROMO_FOOTER_RE = re.compile(r"(?im)^\s*(?:جزئیات\s+در|ادامه\s+در|برای\s+جزئیات|👇+|🆔.*|@RadarIranNews.*)\s*$")
+
+
+def _clean_source_formatting(value: str) -> str:
+    """Remove copied Telegram-channel decoration without touching factual prose."""
+    cleaned = []
+    for raw_line in (value or "").splitlines():
+        line = raw_line.strip()
+        if not line or _DECORATIVE_LINE_RE.fullmatch(line):
+            continue
+        line = _EMOJI_PREFIX_RE.sub("", line).strip()
+        if line.startswith("#"):
+            continue
+        line = re.sub(r"\s+[👇👆⬇⬇️🆔📢📣]+\s*$", "", line).strip()
+        if line:
+            cleaned.append(line)
+    text = "\n".join(cleaned)
+    text = _PROMO_FOOTER_RE.sub("", text)
+    # Source-channel credit often appears appended after a slash at the end of a sentence.
+    text = re.sub(r"\s*[/|—–-]\s*(?:انتخاب|اسکان\s*نیوز|اسکان‌نیوز)\s*$", "", text)
+    text = re.sub(r"(?m)^\s*(?:انتخاب|اسکان\s*نیوز|اسکان‌نیوز)\s*$", "", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _source_outlet(item: Item) -> str:
+    """Map only the two requested source-channel labels to a clean footer credit."""
+    key = (item.source or "").casefold().lstrip("@")
+    return {"entekhab_ir": "انتخاب", "eskannews_com": "اسکان نیوز"}.get(key, "")
+
+
 def _finish(kind: str, title: str, body: str, impact: str = "normal", source: str = "", emoji: str = "") -> Post:
     kind = kind if kind in KINDS else "news"
     impact = "high" if impact == "high" else "normal"
-    title = (title or "").translate(_FA_DIGITS).replace("…", "").replace("...", "").strip().rstrip(".")
-    body = (body or "").translate(_FA_DIGITS).replace("…", "").replace("...", "").strip()
+    title = _clean_source_formatting((title or "").translate(_FA_DIGITS).replace("…", "").replace("...", "")).strip().rstrip(".")
+    body = _clean_source_formatting((body or "").translate(_FA_DIGITS).replace("…", "").replace("...", ""))
     if len(title) > 90:
         title = _fit(title, 90)
     if body.strip() == title.strip():
         body = ""
     body = _fit(body, 300 if impact == "high" else 220)
-    # Source/channel names are intentionally never part of the public post.
+    # All military-development items and US/Israeli official statements about Iran
+    # receive the urgent-news treatment requested by the channel owner.
+    combined = f"{title} {body}"
+    us_israel = re.search(r"ترامپ|ونس|روبیو|هگست|کاخ سفید|آمریکا|ایالات متحده|نتانیاهو|کاتس|ساعر|ارتش اسرائیل|اسرائیل|واشنگتن|تل.?آویو|\b(trump|vance|rubio|hegseth|white house|united states|u\.?s\.?|israel|netanyahu|katz|idf)\b", combined, re.I)
+    iran = re.search(r"ایران|تهران|جمهوری اسلامی|\biran\b|\btehran\b", combined, re.I)
+    statement = re.search(r"اظهار|اظهارات|گفت|اعلام|موضع|هشدار|تهدید|بیانیه|انتقاد|تأکید|تصریح|بررسی|\b(said|says|stated|warned|announced|comments?|remarks?|criticized|statement)\b", combined, re.I)
+    military = re.search(r"جنگ|حمله|موشک|پهپاد|پدافند|نظامی|درگیری|عملیات|airstrike|missile|military|war|attack|drone", combined, re.I)
+    if military or (us_israel and iran and statement):
+        kind = "breaking"
+    # Source-channel names are intentionally never part of the AI body.
     return Post(kind, title, body, impact, "", _clean_emoji(emoji))
 
 
@@ -314,8 +356,8 @@ def _fallback(item: Item) -> Post:
 
 def _publish_original_if_models_fail(item: Item) -> Post:
     """Never lose a relevant item solely because all rewrite/translation APIs failed."""
-    title = (item.title or "").strip()
-    body = (item.text or "").strip()
+    title = _clean_source_formatting(item.title or "")
+    body = _clean_source_formatting(item.text or "")
     if not title and not body:
         raise TranslationUnavailable("source item is empty")
 
