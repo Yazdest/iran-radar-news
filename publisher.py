@@ -11,6 +11,7 @@ import requests
 
 import config
 from sources import UA, Item, Media
+import translator
 from translator import Post
 
 CAPTION_LIMIT = 1024
@@ -23,15 +24,20 @@ class TelegramRejected(Exception):
 
 
 def _topic_tag(post: Post) -> str:
+    text = f"{post.title} {post.body}"
     if post.kind == "breaking":
         return "#خبر_فوری"
-    text = f"{post.title} {post.body}"
+    # Military news and statements by US/Israeli officials about Iran are urgent.
+    us_israel = re.search(r"ترامپ|ونس|روبیو|هگست|کاخ سفید|آمریکا|ایالات متحده|نتانیاهو|کاتس|ساعر|ارتش اسرائیل|اسرائیل|واشنگتن|تل.?آویو|\b(trump|vance|rubio|hegseth|white house|united states|israel|netanyahu|katz|idf)\b", text, re.I)
+    iran = re.search(r"ایران|تهران|جمهوری اسلامی|\biran\b|\btehran\b", text, re.I)
+    statement = re.search(r"اظهار|اظهارات|گفت|اعلام|موضع|هشدار|تهدید|بیانیه|انتقاد|تأکید|تصریح|بررسی|\b(said|says|stated|warned|announced|comments?|remarks?|criticized|statement)\b", text, re.I)
+    military = re.search(r"جنگ|حمله|موشک|پهپاد|پدافند|نظامی|درگیری|عملیات|airstrike|missile|military|war|attack|drone", text, re.I)
+    if military or (us_israel and iran and statement):
+        return "#خبر_فوری"
     if re.search(r"دلار|ارز|تورم|نفت|بورس|اقتصاد|بودجه|ریال|تومان", text):
         return "#اقتصاد"
     if re.search(r"مذاکر(?:ه|ات)|توافق|آتش.?بس|دیپلماسی|تحریم", text):
         return "#مذاکرات"
-    if re.search(r"جنگ|حمله|موشک|پهپاد|پدافند|نظامی|درگیری", text):
-        return "#تحولات_نظامی"
     return "#اخبار_روز"
 
 
@@ -40,10 +46,21 @@ def build_html(post: Post, item: Item) -> str:
     tag = _topic_tag(post)
     head = f"🚨 <b>{tag}</b>" if tag == "#خبر_فوری" else f"📰 <b>{tag}</b>"
     parts = [f"{head}\n\n<b>{e(post.title)}</b>" if post.title else head]
-    if post.body:
-        parts.append(e(post.body))
-    if config.SIGNATURE:
-        parts.append(f"📢 {e(config.SIGNATURE)}")
+    if post.translation_unavailable:
+        parts.append("⚠️ ترجمه در دسترس نیست؛ متن اصلی منتشر شده است.")
+    clean_body = translator._clean_source_formatting(post.body)
+    if clean_body:
+        parts.append(e(clean_body))
+    # Standard, consistent channel identity and a natural follow invitation.
+    parts.append(f"📢 <b>رادار ایران</b> | {e(config.SIGNATURE or '@RadarIranNews')}\nبرای اطلاع از آخرین اخبار و تحولات، رادار ایران را دنبال کنید.")
+    # Requested source credits are placed in one dedicated footer, never left in body text.
+    source_credit = {"entekhab_ir": "انتخاب", "eskannews_com": "اسکان نیوز"}.get(item.source.casefold().lstrip("@"), "")
+    if source_credit:
+        parts.append(f"<b>رسانه:</b> {e(source_credit)}")
+    # Public attribution exception: show only the plain channel ID for WFWitness.
+    # Do not include @, a clickable URL, or a source label.
+    if item.source.casefold().lstrip("@") == "wfwitness":
+        parts.append("wfwitness")
     return "\n\n".join(parts)
 
 
@@ -100,7 +117,11 @@ def _share_keyboard(message_id: int, title: str) -> str | None:
     username = channel[1:]
     post_url = f"https://t.me/{username}/{message_id}"
     share_url = "https://t.me/share/url?" + urlencode({"url": post_url, "text": title[:180]})
-    return json.dumps({"inline_keyboard": [[{"text": "↗️ اشتراک خبر", "url": share_url}]]}, ensure_ascii=False)
+    join_url = config.CHANNEL_JOIN_URL.strip() or f"https://t.me/{username}"
+    return json.dumps({"inline_keyboard": [[
+        {"text": "↗️ اشتراک خبر", "url": share_url},
+        {"text": "➕ عضویت در کانال", "url": join_url},
+    ]]}, ensure_ascii=False)
 
 
 def _attach_share_button(result: dict, title: str) -> None:
