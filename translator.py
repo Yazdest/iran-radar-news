@@ -235,15 +235,14 @@ def _parse(raw: str) -> Post | None:
         raise ValueError("AI response did not contain JSON")
     data = json.loads(match.group(0))
     if data.get("kind") == "skip":
+        print("INFO AI_SKIP: model classified item as not newsworthy", file=sys.stderr)
         return None
     post = _finish(str(data.get("kind", "news")), str(data.get("title", "")), str(data.get("body", "")),
                    str(data.get("impact", "normal")), str(data.get("source", "")), str(data.get("emoji", "")))
     if not post.title or len(post.title) < 18 or (post.body and post.body.casefold() == post.title.casefold()):
-        print("INFO editorial quality gate: skipped incomplete or repetitive item", file=sys.stderr)
-        return None
+        raise ValueError("Editorial quality gate: incomplete or repetitive headline/body")
     if post.title.casefold().startswith(("در واقع", "به نظر می رسد", "به نظر می‌رسد", "همچنان نیاز دارد")):
-        print("INFO editorial quality gate: skipped vague headline", file=sys.stderr)
-        return None
+        raise ValueError("Editorial quality gate: vague headline")
     return post
 
 
@@ -254,7 +253,10 @@ def _groq(item: Item) -> Post | None:
     for model in _GROQ_MODELS:
         try:
             result = _request_chat(_GROQ_URL, config.GROQ_API_KEY, model, item, "groq")
-            print(f"INFO rewrite succeeded: Groq/{model}", file=sys.stderr)
+            if result is None:
+                print(f"INFO AI_SKIP: Groq/{model} classified item as not newsworthy; title={item.title!r}", file=sys.stderr)
+            else:
+                print(f"INFO rewrite succeeded: Groq/{model}; title={result.title!r}", file=sys.stderr)
             return result
         except Exception as exc:
             errors.append(f"{model}: {exc}")
@@ -268,7 +270,10 @@ def _openrouter(item: Item) -> Post | None:
     result = _request_chat(
         _OPENROUTER_URL, config.OPENROUTER_API_KEY, "openrouter/free", item, "openrouter"
     )
-    print("INFO rewrite succeeded: OpenRouter free router", file=sys.stderr)
+    if result is None:
+        print(f"INFO AI_SKIP: OpenRouter classified item as not newsworthy; title={item.title!r}", file=sys.stderr)
+    else:
+        print(f"INFO rewrite succeeded: OpenRouter free router; title={result.title!r}", file=sys.stderr)
     return result
 
 
