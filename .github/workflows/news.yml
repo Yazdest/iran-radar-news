@@ -34,6 +34,18 @@ jobs:
 
       - run: pip install -r requirements.txt
 
+      - name: Persian font for the images (skipped if fonts/ already holds one)
+        run: |
+          mkdir -p fonts
+          if ! ls fonts/*.ttf >/dev/null 2>&1; then
+            for f in Bold Regular; do
+              curl -fsSL -o "fonts/Vazirmatn-$f.ttf" \
+                "https://raw.githubusercontent.com/rastikerdar/vazirmatn/master/fonts/ttf/Vazirmatn-$f.ttf" \
+                || rm -f "fonts/Vazirmatn-$f.ttf"
+            done
+          fi
+          ls fonts || true
+
       - name: Run (checks all sources every 30s for 17 minutes)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
