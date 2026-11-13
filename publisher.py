@@ -57,12 +57,13 @@ def build_html(post: Post, item: Item) -> str:
     if clean_body:
         parts.append(e(clean_body))
 
-    # The follow invitation is above the channel identity, both after the news.
-    parts.append(
+    # Keep two empty lines between the final news/source line and the invitation.
+    footer = (
         "برای اطلاع از آخرین اخبار و تحولات، ما را دنبال کنید.\n"
         f"📡 <b>رادار ایران</b> | {e(config.SIGNATURE or '@RadarIranNews')}"
     )
-    return "\n\n".join(parts)
+    news = "\n\n".join(parts)
+    return f"{news}\n\n\n{footer}"
 
 
 def visible_len(markup: str) -> int:
