@@ -41,7 +41,9 @@ def build_html(post: Post, item: Item) -> str:
         source = f"📡 به گزارش {e(item.source)}"
         if config.SHOW_ARTICLE_LINK and item.url.startswith("http"):
             source += f' · <a href="{e(item.url, quote=True)}">خبر اصلی</a>'
-    tail = " ".join(x for x in (config.DEFAULT_TAGS, config.SIGNATURE) if x)
+    original = f"{item.title} {item.text}"
+    tags = [t for t, rx in (("#ایران", config.IRAN_RE), ("#اسرائیل", config.ISRAEL_RE)) if rx.search(original)]
+    tail = " ".join(tags + ([config.SIGNATURE] if config.SIGNATURE else []))
     parts.append(f"{source}\n{tail}".strip())
     return "\n\n".join(parts)
 
