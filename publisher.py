@@ -29,10 +29,6 @@ class AmbiguousSend(TelegramRejected):
     Retrying blindly can post the same story twice, so main.py decides by AMBIGUOUS_SEND_POLICY."""
 
 
-_UNCONFIRMED_LINE = "⚠️ گزارش اولیه؛ هنوز از منبع دوم تأیید نشده."
-_CONFIRMED_LINE = "✅ تأیید شده توسط چند منبع."
-
-
 def _topic_tag(post: Post) -> str:
     text = f"{post.title} {post.body}"
     # Same rule as translator._finish (breaking, military activity, US/Israeli statements about Iran).
@@ -46,7 +42,7 @@ def _topic_tag(post: Post) -> str:
     return "#اخبار_روز"
 
 
-def build_html(post: Post, item: Item, body_limit: int | None = None, status: str | None = None) -> str:
+def build_html(post: Post, item: Item, body_limit: int | None = None) -> str:
     e = html.escape
     tag = _topic_tag(post)
     head = f"🚨 <b>{tag}</b>" if tag == "#خبر_فوری" else f"📰 <b>{tag}</b>"
@@ -63,10 +59,6 @@ def build_html(post: Post, item: Item, body_limit: int | None = None, status: st
         clean_body = f"{clean_body} | منبع: wfwitness" if clean_body else "منبع: wfwitness"
     if clean_body:
         parts.append(e(clean_body))
-    if status == "unconfirmed":
-        parts.append(_UNCONFIRMED_LINE)
-    elif status == "confirmed":
-        parts.append(_CONFIRMED_LINE)
 
     # Keep two empty lines between the final news/source line and the invitation.
     footer = (
@@ -204,18 +196,18 @@ def _video_repost_allowed(item: Item) -> bool:
     return item.source.casefold() not in {"iranintltv", "iranintl_tv"}
 
 
-def _fit_markup(post: Post, item: Item, status: str | None, limit: int) -> str:
-    markup = build_html(post, item, status=status)
+def _fit_markup(post: Post, item: Item, limit: int) -> str:
+    markup = build_html(post, item)
     body_limit = 3500
     while visible_len(markup) > limit and body_limit > -400:
-        markup = build_html(post, item, body_limit=max(0, body_limit), status=status)
+        markup = build_html(post, item, body_limit=max(0, body_limit))
         body_limit -= 400
     return markup
 
 
-def publish(item: Item, post: Post, status: str | None = None, silent: bool = False) -> dict:
-    """Send one story. Returns {"message_id", "kind"} so main.py can edit the message later (confirmation)."""
-    markup = _fit_markup(post, item, status, TEXT_LIMIT)
+def publish(item: Item, post: Post, silent: bool = False) -> dict:
+    """Send one story. Returns {"message_id", "kind"}."""
+    markup = _fit_markup(post, item, TEXT_LIMIT)
     if config.DRY_RUN:
         eligible_videos = [m for m in item.media if m.kind == "video"] if _video_repost_allowed(item) else []
         print("-" * 40)
@@ -253,31 +245,6 @@ def publish(item: Item, post: Post, status: str | None = None, silent: bool = Fa
         sent = _send_text(markup, silent)
     _attach_share_button(sent, post.title)
     return {"message_id": sent.get("message_id") if isinstance(sent, dict) else None, "kind": kind}
-
-
-def update_confirmation(event: dict) -> None:
-    """A second, different source reported the same event: replace the «unconfirmed» line by «confirmed»."""
-    if config.DRY_RUN or not event.get("mid"):
-        return
-    post = Post(**event["post"])
-    stub = Item(uid="", origin="telegram", source=event.get("src", ""), title="", text="")
-    video = event.get("kind") == "video"
-    markup = _fit_markup(post, stub, "confirmed", CAPTION_LIMIT if video else TEXT_LIMIT)
-    data = {"chat_id": config.CHANNEL, "message_id": event["mid"], "parse_mode": "HTML"}
-    keyboard = _share_keyboard(int(event["mid"]), post.title)
-    if keyboard:
-        data["reply_markup"] = keyboard
-    if video:
-        data["caption"] = markup
-        method = "editMessageCaption"
-    else:
-        data["text"] = markup
-        data["link_preview_options"] = json.dumps({"is_disabled": True})
-        method = "editMessageText"
-    try:
-        _call(method, data)
-    except Exception as exc:
-        print(f"WARN could not mark message {event['mid']} as confirmed: {config.redact(exc)}")
 
 
 def post_to_dict(post: Post) -> dict:
