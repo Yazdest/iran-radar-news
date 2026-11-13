@@ -1,453 +1,129 @@
+"""Builds the post layout and sends it (media uploaded as files, never as links) to the channel."""
+from __future__ import annotations
 
-#!/usr/bin/env python3
-"""
-IRAN RADAR - Telegram Publisher
-
-Two publication queues:
-1. Verified news.
-2. Preliminary breaking reports from Witness (Telegram).
-
-Breaking reports are always explicitly labeled as unverified.
-"""
-
-import os
 import html
+import json
+import re
+import time
+
 import requests
 
-APPS_SCRIPT_URL = os.environ["APPS_SCRIPT_URL"].strip()
-APPS_SCRIPT_SECRET = os.environ["APPS_SCRIPT_SECRET"].strip()
-TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"].strip()
+import config
+from sources import UA, Item, Media
+from translator import Post
 
-TELEGRAM_CHANNEL = "@RadarIranNews"
+CAPTION_LIMIT = 1024
+TEXT_LIMIT = 4096
+PHOTO_MAX = 9_500_000
+VIDEO_MAX = 49_000_000
 
-TIMEOUT = 45
-MAX_MESSAGE_LENGTH = 4000
-MAX_CAPTION_LENGTH = 1000
-
-
-# ---------------------------------------------------------
-# EXCEPTIONS
-# ---------------------------------------------------------
 
 class TelegramRejected(Exception):
-    """Telegram explicitly rejected a request."""
-    pass
+    """Telegram answered with an explicit error (safe to fall back to another format)."""
 
 
-# ---------------------------------------------------------
-# GOOGLE APPS SCRIPT API
-# ---------------------------------------------------------
+# ------------------------------------------------------------------ layout
+def build_html(post: Post, item: Item) -> str:
+    e = html.escape
+    parts = []
+    if post.kind == "breaking":
+        parts.append("🚨 <b>#خبر_فوری</b>")
+    elif post.kind == "story":
+        parts.append("🎙 <b>#روایت</b>")
+    title = f"<b>{e(post.title)}</b>"
+    parts.append(title if post.kind != "news" else f"📰 {title}")
+    if post.body:
+        parts.append(f"<blockquote>{e(post.body)}</blockquote>" if post.kind == "story" else e(post.body))
 
-def api_request(action, **extra):
-
-    payload = {
-        "secret": APPS_SCRIPT_SECRET,
-        "action": action,
-        **extra
-    }
-
-    response = requests.post(
-        APPS_SCRIPT_URL,
-        json=payload,
-        timeout=TIMEOUT
-    )
-
-    response.raise_for_status()
-
-    try:
-        data = response.json()
-    except ValueError as exc:
-        raise RuntimeError(
-            "Invalid JSON response from Apps Script"
-        ) from exc
-
-    if not data.get("ok"):
-        raise RuntimeError(
-            data.get("error", "Apps Script error")
-        )
-
-    return data
-
-
-# ---------------------------------------------------------
-# TELEGRAM API
-# ---------------------------------------------------------
-
-def telegram_request(method, payload):
-
-    url = (
-        f"https://api.telegram.org/"
-        f"bot{TELEGRAM_BOT_TOKEN}/{method}"
-    )
-
-    response = requests.post(
-        url,
-        json=payload,
-        timeout=TIMEOUT
-    )
-
-    response.raise_for_status()
-
-    try:
-        data = response.json()
-    except ValueError as exc:
-        raise RuntimeError(
-            "Invalid response from Telegram"
-        ) from exc
-
-    if not data.get("ok"):
-        raise TelegramRejected(
-            data.get("description", "Telegram rejected request")
-        )
-
-    return data["result"]
-
-
-# ---------------------------------------------------------
-# TEXT HELPERS
-# ---------------------------------------------------------
-
-def clean_value(value, limit):
-    """
-    Truncate raw text before HTML escaping.
-    This prevents broken HTML entities and tags.
-    """
-
-    value = str(value or "").strip()
-
-    if len(value) > limit:
-        value = value[:limit].rsplit(" ", 1)[0].rstrip()
-        value += "…"
-
-    return value
-
-
-def safe_link(value):
-    """
-    Only allow HTTP/HTTPS source links.
-    """
-
-    value = str(value or "").strip()
-
-    if not value.startswith(("https://", "http://")):
-        return ""
-
-    return value
-
-
-# ---------------------------------------------------------
-# MESSAGE BUILDER
-# ---------------------------------------------------------
-
-def build_message(item):
-
-    is_breaking = bool(item.get("breaking"))
-
-    raw_title = clean_value(
-        item.get("persian_title", "خبر"),
-        300
-    )
-
-    raw_text = clean_value(
-        item.get("persian_text", ""),
-        2800
-    )
-
-    raw_source = clean_value(
-        item.get("source", "منبع خبری"),
-        100
-    )
-
-    title = html.escape(raw_title)
-    text = html.escape(raw_text)
-    source = html.escape(raw_source)
-
-    link = safe_link(item.get("source_link", ""))
-
-    if is_breaking:
-
-        header = (
-            "⚠️ <b>گزارش اولیه | تأییدنشده</b>\n"
-            "━━━━━━━━━━━━━━\n"
-        )
-
-        warning = (
-            "\n\n⚠️ <i>این گزارش هنوز به‌صورت مستقل "
-            "تأیید نشده است.</i>"
-        )
-
+    if item.origin == "telegram":
+        source = f"📡 منبع: {e(item.source)}"                       # plain text: no @, no link
     else:
-
-        header = "🛰 <b>خبر تأییدشده</b>\n"
-
-        warning = ""
-
-    message = (
-        f"{header}"
-        f"<b>{title}</b>\n\n"
-        f"{text}"
-        f"{warning}\n\n"
-        f"📰 منبع: {source}\n"
-    )
-
-    if link:
-        message += (
-            f'🔗 <a href="{html.escape(link, quote=True)}">'
-            f"مشاهده خبر اصلی</a>\n"
-        )
-
-    message += (
-        "\n#ایران #اخبار\n"
-        "@RadarIranNews"
-    )
-
-    # Final safety limit. The source and warning are preserved
-    # by conservative limits above.
-    if len(message) > MAX_MESSAGE_LENGTH:
-        raise ValueError(
-            "Generated Telegram message exceeds safe length"
-        )
-
-    return message
+        source = f"📡 به گزارش {e(item.source)}"
+        if config.SHOW_ARTICLE_LINK and item.url.startswith("http"):
+            source += f' · <a href="{e(item.url, quote=True)}">خبر اصلی</a>'
+    tail = " ".join(x for x in (config.DEFAULT_TAGS, config.SIGNATURE) if x)
+    parts.append(f"{source}\n{tail}".strip())
+    return "\n\n".join(parts)
 
 
-# ---------------------------------------------------------
-# PUBLISH ONE ITEM
-# ---------------------------------------------------------
+def visible_len(markup: str) -> int:
+    return len(html.unescape(re.sub(r"<[^>]+>", "", markup)))
 
-def publish_item(item):
 
-    message = build_message(item)
-
-    image_url = str(
-        item.get("image_url", "")
-    ).strip()
-
-    # Try photo only when the complete caption fits.
-    if image_url and len(message) <= MAX_CAPTION_LENGTH:
-
+# ------------------------------------------------------------------ Telegram API
+def _call(method: str, data: dict | None = None, files: dict | None = None):
+    url = f"https://api.telegram.org/bot{config.BOT_TOKEN}/{method}"
+    for _ in range(3):
+        r = requests.post(url, data=data, files=files, timeout=120)
         try:
-
-            result = telegram_request(
-                "sendPhoto",
-                {
-                    "chat_id": TELEGRAM_CHANNEL,
-                    "photo": image_url,
-                    "caption": message,
-                    "parse_mode": "HTML"
-                }
-            )
-
-            return result
-
-        except TelegramRejected as error:
-
-            # Telegram explicitly rejected the photo request.
-            # A text-only fallback is safe in this case.
-            print(
-                "Photo rejected; trying text:",
-                str(error)
-            )
-
-    # Do not fall back after timeouts or ambiguous network
-    # failures: Telegram may already have accepted the message.
-    result = telegram_request(
-        "sendMessage",
-        {
-            "chat_id": TELEGRAM_CHANNEL,
-            "text": message,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": False
-        }
-    )
-
-    return result
-
-
-# ---------------------------------------------------------
-# UPDATE SPREADSHEET STATUS
-# ---------------------------------------------------------
-
-def mark_published(action, external_id):
-
-    result = api_request(
-        action,
-        external_ids=[external_id]
-    )
-
-    published_ids = result.get("published", [])
-
-    if external_id not in published_ids:
-        raise RuntimeError(
-            "Apps Script did not confirm publication status: "
-            + external_id
-        )
-
-
-def mark_failed(external_id, error):
-
-    try:
-
-        api_request(
-            "mark_failed",
-            external_ids=[external_id],
-            reason=str(error)[:400]
-        )
-
-    except Exception as update_error:
-
-        print(
-            "Could not update failure status:",
-            str(update_error)
-        )
-
-
-# ---------------------------------------------------------
-# PROCESS PUBLICATION QUEUE
-# ---------------------------------------------------------
-
-def process_queue(items, breaking=False):
-
-    published_count = 0
-    failed_count = 0
-
-    status_action = (
-        "mark_breaking_published"
-        if breaking
-        else "mark_published"
-    )
-
-    for item in items:
-
-        external_id = str(
-            item.get("external_id", "")
-        ).strip()
-
-        if not external_id:
-            print("Skipping item without external_id")
+            js = r.json()
+        except ValueError:
+            js = {}
+        if js.get("ok"):
+            return js["result"]
+        if r.status_code == 429:  # flood control: request was NOT accepted, so retrying is safe
+            time.sleep(min(int(js.get("parameters", {}).get("retry_after", 5)), 30))
             continue
-
-        try:
-
-            # Additional protection against accidental
-            # cross-queue publication.
-            if breaking:
-                if item.get("source") != "Witness (Telegram)":
-                    raise ValueError(
-                        "Breaking source is not authorized"
-                    )
-
-                item["breaking"] = True
-
-            else:
-                item["breaking"] = False
-
-            telegram_result = publish_item(item)
-
-            message_id = telegram_result.get("message_id")
-
-            print(
-                "Telegram accepted:",
-                external_id,
-                "message_id:",
-                message_id
-            )
-
-            # Mark only after Telegram confirms success.
-            mark_published(
-                status_action,
-                external_id
-            )
-
-            published_count += 1
-
-            print(
-                "Publication recorded:",
-                external_id
-            )
-
-        except Exception as error:
-
-            failed_count += 1
-
-            print(
-                "Publication error:",
-                external_id,
-                str(error)
-            )
-
-            mark_failed(
-                external_id,
-                error
-            )
-
-    return published_count, failed_count
+        raise TelegramRejected(js.get("description", f"HTTP {r.status_code}"))
+    raise TelegramRejected("rate limited")
 
 
-# ---------------------------------------------------------
-# MAIN
-# ---------------------------------------------------------
-
-def main():
-
-    print("===================================")
-    print("IRAN RADAR publisher started.")
-    print("===================================")
-
-    # Translate up to five pending items before fetching queues.
+def _download(m: Media) -> tuple[str, bytes] | None:
+    limit = VIDEO_MAX if m.kind == "video" else PHOTO_MAX
     try:
-
-        translation = api_request("translate_pending")
-
-        print(
-            "Translation:",
-            "translated =", translation.get("translated", 0),
-            "| failed =", translation.get("failed", 0)
-        )
-
-    except Exception as error:
-
-        print(
-            "Translation request failed:",
-            str(error)
-        )
-
-    # Queue 1: independently verified news.
-    verified_result = api_request("get_ready")
-    verified_items = verified_result.get("items", [])
-
-    print(
-        "Verified news ready:",
-        len(verified_items)
-    )
-
-    verified_published, verified_failed = process_queue(
-        verified_items,
-        breaking=False
-    )
-
-    # Queue 2: preliminary reports from trusted Telegram source.
-    breaking_result = api_request("get_breaking_ready")
-    breaking_items = breaking_result.get("items", [])
-
-    print(
-        "Breaking reports ready:",
-        len(breaking_items)
-    )
-
-    breaking_published, breaking_failed = process_queue(
-        breaking_items,
-        breaking=True
-    )
-
-    print("===================================")
-    print("PUBLICATION SUMMARY")
-    print("Verified published:", verified_published)
-    print("Breaking published:", breaking_published)
-    print("Verified failed:", verified_failed)
-    print("Breaking failed:", breaking_failed)
-    print("===================================")
+        with requests.get(m.url, headers=UA, timeout=40, stream=True) as r:
+            r.raise_for_status()
+            buf = bytearray()
+            for chunk in r.iter_content(65536):
+                buf += chunk
+                if len(buf) > limit:
+                    return None
+        return ("video.mp4" if m.kind == "video" else "photo.jpg"), bytes(buf)
+    except Exception:
+        return None
 
 
-if __name__ == "__main__":
-    main()
+def _send_text(text: str):
+    return _call("sendMessage", {"chat_id": config.CHANNEL, "text": text, "parse_mode": "HTML",
+                                 "link_preview_options": json.dumps({"is_disabled": True})})
+
+
+def _send_media(files: list[tuple[Media, tuple[str, bytes]]], caption: str | None):
+    cap = {"caption": caption, "parse_mode": "HTML"} if caption else {}
+    if len(files) == 1:
+        m, f = files[0]
+        field = "video" if m.kind == "video" else "photo"
+        data = {"chat_id": config.CHANNEL, **cap}
+        if m.kind == "video":
+            data["supports_streaming"] = "true"
+        return _call("sendVideo" if m.kind == "video" else "sendPhoto", data, {field: f})
+    media, attach = [], {}
+    for i, (m, f) in enumerate(files):
+        entry = {"type": m.kind, "media": f"attach://f{i}"}
+        if i == 0:
+            entry.update(cap)
+        media.append(entry)
+        attach[f"f{i}"] = f
+    return _call("sendMediaGroup", {"chat_id": config.CHANNEL, "media": json.dumps(media)}, attach)
+
+
+# ------------------------------------------------------------------ publish one item
+def publish(item: Item, post: Post) -> None:
+    markup = build_html(post, item)
+    if config.DRY_RUN:
+        print("-" * 40, f"\n[{post.kind}] media={[(m.kind, m.url[:60]) for m in item.media]}\n{markup}\n")
+        return
+
+    files = [(m, d) for m in item.media if (d := _download(m))]
+    if not files:
+        _send_text(markup[:TEXT_LIMIT])
+        return
+
+    fits = visible_len(markup) <= CAPTION_LIMIT
+    try:
+        _send_media(files, markup if fits else None)
+        if not fits:                      # long text: media first, full text right after it
+            _send_text(markup[:TEXT_LIMIT])
+    except TelegramRejected as exc:       # e.g. unsupported file: still deliver the news itself
+        print(f"WARN media rejected ({exc}); sending text only")
+        _send_text(markup[:TEXT_LIMIT])
