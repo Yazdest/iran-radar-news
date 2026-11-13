@@ -48,6 +48,8 @@ jobs:
           RUN_MINUTES: '14'
           POLL_SECONDS: '30'
           PUBLISH_INTERVAL_SECONDS: '3'
+          # Hard cap for rewriting one story, so a bad AI day cannot push the run past timeout-minutes.
+          ITEM_BUDGET_SECONDS: '60'
           ALLOW_FALLBACK: '1'
         run: python -u main.py
 
