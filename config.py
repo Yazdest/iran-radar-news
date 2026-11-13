@@ -18,7 +18,9 @@ OPENROUTER_API_KEY = _env("OPENROUTER_API_KEY")
 POLL_SECONDS = int(_env("POLL_SECONDS", "30"))
 RUN_MINUTES = float(_env("RUN_MINUTES", "0"))
 MAX_AGE_MINUTES = int(_env("MAX_AGE_MINUTES", "360"))
-MAX_PER_CYCLE = int(_env("MAX_PER_CYCLE", "20"))
+# Deliberately publish at most one item per polling cycle to prevent bursts.
+MAX_PER_CYCLE = 1
+PUBLISH_INTERVAL_SECONDS = max(1, int(_env("PUBLISH_INTERVAL_SECONDS", "60")))
 BOOTSTRAP = _env("BOOTSTRAP", "0") == "1"
 DRY_RUN = _env("DRY_RUN", "0") == "1"
 # AI rewriting is required. Plain machine translation is disabled unless explicitly enabled.
