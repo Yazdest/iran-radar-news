@@ -1,6 +1,0 @@
-After extracting this package into the repository root, delete these old unused poster/X files if they still exist:
-- cards.py
-- tweets.py
-- fonts/  (entire directory)
-
-The updated main.py, publisher.py and sources.py no longer import or use them.
