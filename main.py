@@ -142,6 +142,7 @@ def cycle(state: State) -> bool:
 
     new_headlines: list[str] = []
     published_any = False
+    published_count = 0
     for item, post in zip(batch, posts):
         if post is RETRY:
             # Last-resort source-text publication: model errors must never block the news queue.
@@ -164,9 +165,14 @@ def cycle(state: State) -> bool:
             state.fails.pop(item.uid, None)
             continue
 
+        # Keep a steady cadence when a cycle contains multiple eligible stories.
+        if published_count:
+            time.sleep(config.PUBLISH_INTERVAL_SECONDS)
+
         try:
             publisher.publish(item, post)
             published_any = True
+            published_count += 1
             state.mark(item.uid, item)
             state.fails.pop(item.uid, None)
             state.remember_title(item.title)
@@ -204,9 +210,8 @@ def main() -> None:
         if once:
             break
 
-        # Poll frequently, but never send multiple queued stories in a burst.
-        # After a successful post, wait at least PUBLISH_INTERVAL_SECONDS before
-        # another item can be published; empty cycles keep the regular poll rate.
+        # Poll frequently; each cycle may publish up to MAX_PER_CYCLE stories.
+        # cycle() spaces multiple successful posts; this outer wait spaces cycles.
         if published:
             last_published_at = time.time()
         sleep_for = max(1, config.POLL_SECONDS - (time.time() - started))
