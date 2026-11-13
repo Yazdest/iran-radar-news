@@ -9,9 +9,9 @@ def _env(name: str, default: str = "") -> str:
 
 BOT_TOKEN = _env("TELEGRAM_BOT_TOKEN")
 CHANNEL = _env("TELEGRAM_CHANNEL", "@RadarIranNews")
-SIGNATURE = _env("CHANNEL_SIGNATURE", CHANNEL if CHANNEL.startswith("@") else "")
+SIGNATURE = _env("CHANNEL_SIGNATURE", "@RadarIranNews")
+CHANNEL_JOIN_URL = _env("CHANNEL_JOIN_URL", "https://t.me/RadarIranNews")
 
-# Free-tier text providers.
 GROQ_API_KEY = _env("GROQ_API_KEY")
 OPENROUTER_API_KEY = _env("OPENROUTER_API_KEY")
 
@@ -21,10 +21,11 @@ MAX_AGE_MINUTES = int(_env("MAX_AGE_MINUTES", "360"))
 MAX_PER_CYCLE = int(_env("MAX_PER_CYCLE", "20"))
 BOOTSTRAP = _env("BOOTSTRAP", "0") == "1"
 DRY_RUN = _env("DRY_RUN", "0") == "1"
+# AI rewriting is required. Plain machine translation is disabled unless explicitly enabled.
 ALLOW_FALLBACK = _env("ALLOW_FALLBACK", "0") == "1"
 STATE_FILE = _env("STATE_FILE", "state/seen.json")
 
-# Keep the seven Telegram sources currently configured in the public main branch.
+# The only source channels. Add/remove channels here when the owner requests it.
 TELEGRAM_SOURCES = [
     {"channel": "ScopeHQ", "strip_lines": []},
     {"channel": "entekhab_ir", "strip_lines": []},
@@ -33,12 +34,11 @@ TELEGRAM_SOURCES = [
     {"channel": "IranintlTV", "strip_lines": []},
     {"channel": "eskannews_com", "strip_lines": []},
     {"channel": "Minas_Tirith2024", "strip_lines": []},
+    # English-language source: only posts explicitly marked with the Iran flag are eligible.
+    {"channel": "wfwitness", "strip_lines": [], "require_iran_flag": True},
 ]
-# sources.py in the current branch reads these collections; keep them explicitly empty
-# so the configured Telegram-only source list remains authoritative.
-RSS_FEEDS = []
-TWEET_ACCOUNTS = []
 
+# Content scope: war/security, Iran-US-Israel positions, negotiations and macroeconomy.
 RELEVANT_RE = re.compile(
     r"جنگ|حمله|حملات|موشک|پهپاد|پدافند|انفجار|عملیات نظامی|درگیری|تلافی|تشدید تنش|"
     r"آتش.?بس|مذاکر(?:ه|ات)|گفت.?وگو|توافق|میز مذاکره|تحریم|هسته.?ای|غنی.?سازی|تنگه هرمز|"
