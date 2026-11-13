@@ -25,7 +25,7 @@ class TelegramRejected(Exception):
 
 def _topic_tag(post: Post) -> str:
     text = f"{post.title} {post.body}"
-    if post.kind == "breaking":
+    if post.kind == "breaking" or translator.is_urgent_military_development(text):
         return "#خبر_فوری"
     # Military news and statements by US/Israeli officials about Iran are urgent.
     us_israel = re.search(r"ترامپ|ونس|روبیو|هگست|کاخ سفید|آمریکا|ایالات متحده|نتانیاهو|کاتس|ساعر|ارتش اسرائیل|اسرائیل|واشنگتن|تل.?آویو|\b(trump|vance|rubio|hegseth|white house|united states|israel|netanyahu|katz|idf)\b", text, re.I)
