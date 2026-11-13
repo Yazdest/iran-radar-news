@@ -60,9 +60,6 @@ STATE_FILE = _env("STATE_FILE", "state/seen.json")
 # (any US/Israel + Iran + "said/announced" text). "0" (default) = named officials (Trump, Rubio, Netanyahu...)
 # with any statement verb, and generic US/Israel mentions only when the text is a threat/warning.
 URGENT_ANY_STATEMENT = _env("URGENT_ANY_STATEMENT", "0") == "1"
-# Label live military reports: "⚠️ preliminary, not yet confirmed by a second source", edited to
-# "✅ confirmed by several sources" when a second, different source channel reports the same event.
-SINGLE_SOURCE_LABEL = _env("SINGLE_SOURCE_LABEL", "1") == "1"
 # Non-urgent posts are sent without a phone notification; only breaking / high-impact posts make noise.
 SILENT_NON_URGENT = _env("SILENT_NON_URGENT", "1") == "1"
 # What to do when Telegram may or may not have received a message (read timeout, process killed mid-send):
