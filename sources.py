@@ -102,7 +102,7 @@ def collect_rss(feed: dict) -> list[Item]:
         summary = "" if feed.get("gnews") else strip_html(e.get("summary", e.get("description", "")))
         if not title or not link:
             continue
-        if not config.IRAN_RE.search(f"{title} {summary}") and not feed.get("gnews"):
+        if not config.RELEVANT_RE.search(f"{title} {summary}") and not feed.get("gnews"):
             continue
         t = e.get("published_parsed") or e.get("updated_parsed")
         when = datetime.fromtimestamp(calendar.timegm(t), timezone.utc) if t else None
@@ -149,7 +149,7 @@ def collect_telegram(src: dict) -> list[Item]:
         if not post or not body:
             continue
         text = clean_tg_text(body)
-        if not text or (src.get("filter_iran", True) and not config.IRAN_RE.search(text)):
+        if not text or (src.get("filter_iran", True) and not config.RELEVANT_RE.search(text)):
             continue
         media: list[Media] = []
         for a in node.select("a.tgme_widget_message_photo_wrap"):
