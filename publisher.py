@@ -18,6 +18,7 @@ from translator import Post
 CAPTION_LIMIT = 1024
 TEXT_LIMIT = 4096
 VIDEO_MAX = 49_000_000
+PHOTO_MAX = 9_500_000
 
 
 class TelegramRejected(Exception):
@@ -27,10 +28,6 @@ class TelegramRejected(Exception):
 class AmbiguousSend(TelegramRejected):
     """The request may or may not have reached Telegram (read timeout, connection dropped mid-answer).
     Retrying blindly can post the same story twice, so main.py decides by AMBIGUOUS_SEND_POLICY."""
-
-
-_UNCONFIRMED_LINE = "⚠️ گزارش اولیه؛ هنوز از منبع دوم تأیید نشده."
-_CONFIRMED_LINE = "✅ تأیید شده توسط چند منبع."
 
 
 def _topic_tag(post: Post) -> str:
@@ -46,7 +43,7 @@ def _topic_tag(post: Post) -> str:
     return "#اخبار_روز"
 
 
-def build_html(post: Post, item: Item, body_limit: int | None = None, status: str | None = None) -> str:
+def build_html(post: Post, item: Item, body_limit: int | None = None) -> str:
     e = html.escape
     tag = _topic_tag(post)
     head = f"🚨 <b>{tag}</b>" if tag == "#خبر_فوری" else f"📰 <b>{tag}</b>"
@@ -57,16 +54,17 @@ def build_html(post: Post, item: Item, body_limit: int | None = None, status: st
     clean_body = translator._clean_source_formatting(post.body)
     if body_limit is not None and len(clean_body) > body_limit:
         clean_body = (clean_body[:body_limit].rstrip() + "…") if body_limit > 0 else ""   # plain text, never half a tag
-    # WFWitness is the sole Telegram source whose plain identifier is public.
-    # Keep it inline at the end of the news paragraph, exactly as requested.
-    if item.source.casefold().lstrip("@") == "wfwitness":
-        clean_body = f"{clean_body} | منبع: wfwitness" if clean_body else "منبع: wfwitness"
+    # Only the channels in config.CREDITED_SOURCES (wfwitness, Entekhab, Eskan News) are named, inline at the
+    # end of the news paragraph. Every other Telegram channel stays anonymous.
+    credit = config.CREDITED_SOURCES.get(config.source_key(item.source))
+    if credit:
+        tail = f"منبع: {credit}"
+        if not clean_body:
+            clean_body = tail
+        elif not clean_body.rstrip().endswith(credit):
+            clean_body = f"{clean_body} | {tail}"
     if clean_body:
         parts.append(e(clean_body))
-    if status == "unconfirmed":
-        parts.append(_UNCONFIRMED_LINE)
-    elif status == "confirmed":
-        parts.append(_CONFIRMED_LINE)
 
     # Keep two empty lines between the final news/source line and the invitation.
     footer = (
@@ -154,7 +152,7 @@ def _share_keyboard(message_id: int, title: str) -> str | None:
     share_url = "https://t.me/share/url?" + urlencode({"url": post_url, "text": title[:180]})
     join_url = config.CHANNEL_JOIN_URL.strip() or f"https://t.me/{username}"
     return json.dumps({"inline_keyboard": [[
-        {"text": "↗️ اشتراک خبر", "url": share_url},
+        {"text": "↗️ اشتراک‌گذاری", "url": share_url},
         {"text": "➕ عضویت در کانال", "url": join_url},
     ]]}, ensure_ascii=False)
 
@@ -175,6 +173,32 @@ def _attach_share_button(result: dict, title: str) -> None:
     except Exception as exc:
         # The news has already been sent; a missing optional share button must not cause a duplicate retry.
         print(f"WARN could not attach share button: {config.redact(exc)}")
+
+
+def _download_photo(media: Media) -> tuple[str, bytes] | None:
+    if media.kind != "photo" or not media.url:
+        return None
+    try:
+        with requests.get(media.url, headers=UA, timeout=30, stream=True) as response:
+            response.raise_for_status()
+            content_type = response.headers.get("Content-Type", "").lower()
+            if "image" not in content_type:
+                print(f"WARN photo URL did not return an image content type: {content_type}")
+                return None
+            data = bytearray()
+            for chunk in response.iter_content(65536):
+                if chunk:
+                    data.extend(chunk)
+                    if len(data) > PHOTO_MAX:
+                        print("WARN source photo exceeds Telegram bot upload limit")
+                        return None
+        if not data:
+            return None
+        ext = "png" if "png" in content_type else "webp" if "webp" in content_type else "jpg"
+        return f"source-photo.{ext}", bytes(data)
+    except Exception as exc:
+        print(f"WARN could not download source photo: {config.redact(exc)}")
+        return None
 
 
 def _send_text(text: str, silent: bool = False) -> dict:
@@ -200,84 +224,88 @@ def _send_video(filename: str, content: bytes, caption: str, silent: bool = Fals
     return _call("sendVideo", data, {"video": (filename, content, "video/mp4")})
 
 
+def _send_photo(filename: str, content: bytes, caption: str, silent: bool = False, reply_to: int | None = None) -> dict:
+    data = {"chat_id": config.CHANNEL}
+    if caption:
+        data.update({"caption": caption, "parse_mode": "HTML"})
+    if silent:
+        data["disable_notification"] = "true"
+    if reply_to:
+        data["reply_parameters"] = json.dumps({"message_id": reply_to, "allow_sending_without_reply": True})
+    mime = "image/png" if filename.endswith(".png") else "image/webp" if filename.endswith(".webp") else "image/jpeg"
+    return _call("sendPhoto", data, {"photo": (filename, content, mime)})
+
+
 def _video_repost_allowed(item: Item) -> bool:
-    return item.source.casefold() not in {"iranintltv", "iranintl_tv"}
+    return config.video_allowed(item.source)
 
 
-def _fit_markup(post: Post, item: Item, status: str | None, limit: int) -> str:
-    markup = build_html(post, item, status=status)
+def _photo_repost_allowed(item: Item) -> bool:
+    return config.photo_allowed(item.source)
+
+
+def _pick_media(item: Item) -> Media | None:
+    """One visual per post: the source video if there is one, otherwise the first source photo."""
+    if _video_repost_allowed(item):
+        for m in item.media:
+            if m.kind == "video":
+                return m
+    if _photo_repost_allowed(item):
+        for m in item.media:
+            if m.kind == "photo":
+                return m
+    return None
+
+
+def _fit_markup(post: Post, item: Item, limit: int) -> str:
+    markup = build_html(post, item)
     body_limit = 3500
     while visible_len(markup) > limit and body_limit > -400:
-        markup = build_html(post, item, body_limit=max(0, body_limit), status=status)
+        markup = build_html(post, item, body_limit=max(0, body_limit))
         body_limit -= 400
     return markup
 
 
-def publish(item: Item, post: Post, status: str | None = None, silent: bool = False) -> dict:
-    """Send one story. Returns {"message_id", "kind"} so main.py can edit the message later (confirmation)."""
-    markup = _fit_markup(post, item, status, TEXT_LIMIT)
+def publish(item: Item, post: Post, silent: bool = False) -> dict:
+    """Send one story. Returns {"message_id", "kind"}."""
+    markup = _fit_markup(post, item, TEXT_LIMIT)
+    chosen = _pick_media(item)
     if config.DRY_RUN:
-        eligible_videos = [m for m in item.media if m.kind == "video"] if _video_repost_allowed(item) else []
         print("-" * 40)
-        print(f"source(internal)={item.source} video_count={len(eligible_videos)} silent={silent}")
+        print(f"source(internal)={item.source} media={chosen.kind if chosen else 'none'} silent={silent}")
         print(markup)
         return {}
 
-    # Explicit exception: Iran International videos are never copied/re-uploaded.
-    videos = [m for m in item.media if m.kind == "video"] if _video_repost_allowed(item) else []
     sent = None
     kind = "text"
-    if videos:
-        downloaded = _download_video(videos[0])
+    if chosen is not None:
+        is_video = chosen.kind == "video"
+        downloaded = _download_video(chosen) if is_video else _download_photo(chosen)
+        send = _send_video if is_video else _send_photo
         if downloaded and visible_len(markup) <= CAPTION_LIMIT:
             filename, content = downloaded
-            sent = _send_video(filename, content, markup, silent)
-            kind = "video"
+            sent = send(filename, content, markup, silent)
+            kind = chosen.kind
         elif downloaded:
-            # The caption would exceed Telegram's 1024 limit. The old code silently dropped the video here.
-            # Now: the full text goes out first (it is the news), and the video follows as a reply.
+            # The caption would exceed Telegram's 1024 limit. The full text goes out first (it is the news),
+            # and the video/photo follows as a reply.
             filename, content = downloaded
             sent = _send_text(markup, silent)
             _attach_share_button(sent, post.title)
             try:
-                _send_video(filename, content, "", silent, reply_to=sent.get("message_id"))
+                send(filename, content, "", silent, reply_to=sent.get("message_id"))
             except AmbiguousSend:
-                print("WARN video upload state unknown; not retrying (the text is already published)")
+                print(f"WARN {chosen.kind} upload state unknown; not retrying (the text is already published)")
             except Exception as exc:
-                print(f"WARN video could not be attached to the published text: {config.redact(exc)}")
+                print(f"WARN {chosen.kind} could not be attached to the published text: {config.redact(exc)}")
             return {"message_id": sent.get("message_id"), "kind": "text"}
         else:
-            print(f"INFO video unavailable for {item.source}; publishing concise text instead")
+            print(f"INFO {chosen.kind} unavailable for {item.source}; publishing concise text instead")
 
     if sent is None:
         sent = _send_text(markup, silent)
     _attach_share_button(sent, post.title)
     return {"message_id": sent.get("message_id") if isinstance(sent, dict) else None, "kind": kind}
-
-
-def update_confirmation(event: dict) -> None:
-    """A second, different source reported the same event: replace the «unconfirmed» line by «confirmed»."""
-    if config.DRY_RUN or not event.get("mid"):
-        return
-    post = Post(**event["post"])
-    stub = Item(uid="", origin="telegram", source=event.get("src", ""), title="", text="")
-    video = event.get("kind") == "video"
-    markup = _fit_markup(post, stub, "confirmed", CAPTION_LIMIT if video else TEXT_LIMIT)
-    data = {"chat_id": config.CHANNEL, "message_id": event["mid"], "parse_mode": "HTML"}
-    keyboard = _share_keyboard(int(event["mid"]), post.title)
-    if keyboard:
-        data["reply_markup"] = keyboard
-    if video:
-        data["caption"] = markup
-        method = "editMessageCaption"
-    else:
-        data["text"] = markup
-        data["link_preview_options"] = json.dumps({"is_disabled": True})
-        method = "editMessageText"
-    try:
-        _call(method, data)
-    except Exception as exc:
-        print(f"WARN could not mark message {event['mid']} as confirmed: {config.redact(exc)}")
 
 
 def post_to_dict(post: Post) -> dict:
