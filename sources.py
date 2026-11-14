@@ -27,7 +27,7 @@ _IRAN_NAME_RE = re.compile(r"\b(?:iran(?:ian)?|tehran|irgc)\b", re.I)
 
 @dataclass
 class Media:
-    kind: str  # "video" or "photo" (photos are intentionally not republished)
+    kind: str  # "video" or "photo"
     url: str
     data: bytes | None = None
 
@@ -188,11 +188,17 @@ def collect_telegram(src: dict) -> list[Item]:
             continue
 
         media: list[Media] = []
-        # Only videos are eligible for reposting. Photo-only posts remain text posts.
         for player in node.select("a.tgme_widget_message_video_player, .tgme_widget_message_roundvideo_player"):
             url = _video_url(player)
             if url:
                 media.append(Media("video", url))
+        # Photos (publisher.py decides per channel whether they are re-posted).
+        for wrap in node.select("a.tgme_widget_message_photo_wrap"):
+            url = _bg(wrap)
+            if url.startswith("//"):
+                url = "https:" + url
+            if url.startswith("http"):
+                media.append(Media("photo", url))
 
         time_tag = node.select_one("a.tgme_widget_message_date time")
         when = None
