@@ -47,32 +47,26 @@ def build_html(post: Post, item: Item, body_limit: int | None = None) -> str:
     e = html.escape
     tag = _topic_tag(post)
     head = f"🚨 <b>{tag}</b>" if tag == "#خبر_فوری" else f"📰 <b>{tag}</b>"
-    parts = [f"{head}\n\n<b>{e(post.title)}</b>" if post.title else head]
+    # Last gate before publishing: spelling of names/terms (wfwitness translations in particular).
+    title = translator.fix_persian_names(post.title or "")
+    parts = [f"{head}\n\n<b>{e(title)}</b>" if title else head]
     if post.translation_unavailable:
         parts.append("⚠️ ترجمه در دسترس نیست؛ متن اصلی منتشر شده است.")
 
-    clean_body = translator._clean_source_formatting(post.body)
+    clean_body = translator.fix_persian_names(translator._clean_source_formatting(post.body))
     if body_limit is not None and len(clean_body) > body_limit:
         clean_body = (clean_body[:body_limit].rstrip() + "…") if body_limit > 0 else ""   # plain text, never half a tag
-    # Only the channels in config.CREDITED_SOURCES (wfwitness, Entekhab, Eskan News) are named, inline at the
-    # end of the news paragraph. Every other Telegram channel stays anonymous.
-    credit = config.CREDITED_SOURCES.get(config.source_key(item.source))
-    if credit:
-        tail = f"منبع: {credit}"
-        if not clean_body:
-            clean_body = tail
-        elif not clean_body.rstrip().endswith(credit):
-            clean_body = f"{clean_body} | {tail}"
     if clean_body:
         parts.append(e(clean_body))
 
-    # Keep two empty lines between the final news/source line and the invitation.
-    footer = (
-        "برای اطلاع از آخرین اخبار و تحولات، ما را دنبال کنید.\n"
-        f"📡 <b>رادار ایران</b> | {e(config.SIGNATURE or '@RadarIranNews')}"
-    )
-    news = "\n\n".join(parts)
-    return f"{news}\n\n\n{footer}"
+    # Only the channels in config.CREDITED_SOURCES (wfwitness, Entekhab, Eskan News) are named, on a line of their
+    # own under the news. Every other Telegram channel stays anonymous.
+    credit = config.CREDITED_SOURCES.get(config.source_key(item.source))
+    if credit and credit not in clean_body[-60:]:
+        parts.append(f"🔗 منبع: {e(credit)}")
+
+    footer = f"📡 <b>رادار ایران</b> | {e(config.SIGNATURE or '@RadarIranNews')}"
+    return "\n\n".join(parts) + f"\n\n{footer}"
 
 
 def visible_len(markup: str) -> int:
@@ -150,10 +144,8 @@ def _share_keyboard(message_id: int, title: str) -> str | None:
     username = channel[1:]
     post_url = f"https://t.me/{username}/{message_id}"
     share_url = "https://t.me/share/url?" + urlencode({"url": post_url, "text": title[:180]})
-    join_url = config.CHANNEL_JOIN_URL.strip() or f"https://t.me/{username}"
     return json.dumps({"inline_keyboard": [[
         {"text": "↗️ اشتراک‌گذاری", "url": share_url},
-        {"text": "➕ عضویت در کانال", "url": join_url},
     ]]}, ensure_ascii=False)
 
 
