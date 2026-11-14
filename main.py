@@ -25,9 +25,13 @@ def is_breaking(item: sources.Item) -> bool:
 
 
 def sort_items(items: list, now: datetime) -> list:
-    """Breaking news first (whatever the source, WFWitness included), then oldest -> newest so the
-    channel timeline reads in the order things happened."""
-    return sorted(items, key=lambda item: (0 if is_breaking(item) else 1, (item.published or now).timestamp()))
+    """Priority first (image of a Trump / US / Iranian-official statement or an Israeli-media report), then
+    breaking news (whatever the source), then oldest -> newest so the timeline reads in the order things happened."""
+    def rank(item) -> int:
+        if translator.is_priority_item(item):
+            return 0
+        return 1 if is_breaking(item) else 2
+    return sorted(items, key=lambda item: (rank(item), (item.published or now).timestamp()))
 
 
 class State:
@@ -40,7 +44,6 @@ class State:
         self.chan_fail: dict[str, int] = {}     # channel -> consecutive unusable polls
         self.titles: list[tuple[float, str]] = []   # (timestamp, text) of recently published events
         self.pending: dict[str, float] = {}     # uid -> time a send started (still here = outcome unknown)
-        self.events: list[dict] = []            # recent published events (for «confirmed by a second source»)
         self.skips: list[dict] = []             # last stories NOT published and why (review the AI's decisions)
         self.run_skips: list[dict] = []         # same, this run only (job summary)
         self._sigs: dict[str, tuple[frozenset, frozenset]] = {}
@@ -53,7 +56,6 @@ class State:
                 self.defer = data.get("defer", {})
                 self.chan_fail = data.get("chan_fail", {})
                 self.pending = data.get("pending", {})
-                self.events = data.get("events", [])
                 self.skips = data.get("skips", [])
                 now = time.time()
                 for entry in data.get("titles", []):
@@ -113,7 +115,10 @@ class State:
                 if common < 3:
                     continue
                 overlap = common / len(a | b)
-                similar = (overlap >= 0.60 and common >= 5)
+                # Containment: a short headline whose words are (almost) all inside an older, longer text is the
+                # same story. Jaccard alone misses it because the longer text dilutes the score.
+                contained = common / min(len(a), len(b))
+                similar = (overlap >= 0.50 and common >= 4) or (contained >= 0.75 and common >= 5)
                 if not similar and overlap >= 0.80:
                     similar = SequenceMatcher(None, norm_a, " ".join(sorted(b))).ratio() >= 0.92
                 if not similar:
@@ -147,44 +152,16 @@ class State:
     def is_duplicate(self, text: str, extra=()) -> bool:
         return self.find_duplicate(text, extra) is not None
 
-    # ---------------------------------------------------------------- events / confirmation
-    def add_event(self, item: sources.Item, post: translator.Post, result: dict, event_text: str, sources_: set[str]) -> None:
-        result = result or {}
-        self.events.append({
-            "ts": time.time(), "texts": [re.sub(r"\s+", " ", item.title).strip()[:700], re.sub(r"\s+", " ", event_text).strip()[:700]],
-            "sources": sorted(sources_ | {item.source}), "mid": result.get("message_id"), "kind": result.get("kind", "text"),
-            "post": publisher.post_to_dict(post), "src": item.source,
-            # only live military claims carry the «unconfirmed» label; only those can be «confirmed» later
-            "label": bool(config.SINGLE_SOURCE_LABEL and translator.needs_confirmation(post)),
-            "confirmed": len(sources_ | {item.source}) >= 2,
-        })
-        self.events = self.events[-300:]
-
-    def confirm(self, matched_text: str, source: str) -> dict | None:
-        """Record that `source` also reported the event whose text is `matched_text`. Returns the event when it
-        has just become confirmed (second distinct source) so the caller can edit the published message."""
-        clean = re.sub(r"\s+", " ", matched_text).strip()[:700]
-        for event in reversed(self.events):
-            if clean in event["texts"]:
-                if source not in event["sources"]:
-                    event["sources"].append(source)
-                if event["label"] and not event["confirmed"] and len(event["sources"]) >= 2:
-                    event["confirmed"] = True
-                    return event
-                return None
-        return None
-
     def save(self) -> None:
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
         now = time.time()
         newest = dict(sorted(self.seen.items(), key=lambda pair: pair[1])[-8000:])
         titles = [[ts, text] for ts, text in self.titles if now - ts < 24 * 3600][-1200:]
         defer = {k: v for k, v in self.defer.items() if v > now}
-        events = [e for e in self.events if now - e["ts"] < 6 * 3600][-300:]
         tmp = self.path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump({"seen": newest, "titles": titles, "fails": self.fails, "defer": defer,
-                       "chan_fail": self.chan_fail, "pending": self.pending, "events": events,
+                       "chan_fail": self.chan_fail, "pending": self.pending,
                        "skips": self.skips[-300:]}, fh, ensure_ascii=False)
         os.replace(tmp, self.path)
 
@@ -194,7 +171,10 @@ RETRY = object()
 
 def prepare(item: sources.Item):
     try:
-        return translator.make_post(item)
+        post = translator.make_post(item)
+        if post is not None and translator.is_priority_item(item):
+            post.impact = "high"        # priority news also makes a notification sound
+        return post
     except Exception as exc:
         print(f"WARN rewrite unavailable for {item.source}: {config.redact(exc)}", file=sys.stderr)
         return RETRY
@@ -234,13 +214,6 @@ def resolve_pending(state: State, stats: Counter) -> None:
             publisher.notify_admin(f"⚠️ IRAN RADAR: a send was interrupted ({uid}); not repeated to avoid a duplicate.")
             state.mark(uid)
             stats["pending_skipped"] += 1
-
-
-def _confirm(state: State, matched: str, source: str, stats: Counter) -> None:
-    event = state.confirm(matched, source)
-    if event:
-        publisher.update_confirmation(event)
-        stats["confirmed"] += 1
 
 
 def cycle(state: State, deadline: float | None = None) -> bool:
@@ -289,22 +262,22 @@ def cycle(state: State, deadline: float | None = None) -> bool:
             ready.append(item)
 
     batch, raw_pool = [], []
-    pool_sources: dict[str, set[str]] = {}      # raw title of a batch story -> channels that reported it
     for item in sort_items(ready, now):
         if len(batch) >= config.MAX_PER_CYCLE:
             break   # the rest stays unseen and is picked up by the next cycle
-        dup = state.find_duplicate(item.title, raw_pool)
+        # Compare the headline AND the opening of the text (the headline alone is often only a few words).
+        probe = item.title if item.text.startswith(item.title) else f"{item.title} {item.text[:250]}"
+        dup = state.find_duplicate(item.title, raw_pool) or state.find_duplicate(probe, raw_pool)
         if dup is not None:
             state.mark(item.uid, item)
             stats["dup_before_ai"] += 1
-            if dup in pool_sources:
-                pool_sources[dup].add(item.source)        # same cycle, not published yet
-            else:
-                _confirm(state, dup, item.source, stats)  # already on the channel
             continue
-        raw_pool.append(item.title)
-        pool_sources[item.title] = {item.source}
+        raw_pool.append(probe)
         batch.append(item)
+
+    # The model sees what was already published so it can drop a repeat that wording/event rules missed.
+    window_start = time.time() - config.DEDUP_WINDOW_HOURS * 3600
+    translator.RECENT_POSTS = [text for ts, text in state.titles if ts >= window_start][-60:]
 
     if not batch:
         print("CYCLE " + " ".join(f"{k}={v}" for k, v in sorted(stats.items())))
@@ -349,22 +322,17 @@ def cycle(state: State, deadline: float | None = None) -> bool:
                 print(f"INFO duplicate event suppressed: {post.title}")
                 state.mark(item.uid, item)
                 stats["dup_after_ai"] += 1
-                _confirm(state, dup, item.source, stats)
                 continue
 
             if published_count:
                 time.sleep(config.PUBLISH_INTERVAL_SECONDS)   # short spacing, posts go out back to back
 
-            reporters = pool_sources.get(item.title, {item.source}) | {item.source}
-            label = None
-            if config.SINGLE_SOURCE_LABEL and translator.needs_confirmation(post):
-                label = "confirmed" if len(reporters) >= 2 else "unconfirmed"
             silent = bool(config.SILENT_NON_URGENT and post.kind != "breaking" and post.impact != "high")
 
             state.pending[item.uid] = time.time()    # «send started»: survives a crash between send and mark
             state.save()
             try:
-                result = publisher.publish(item, post, status=label, silent=silent)
+                result = publisher.publish(item, post, silent=silent)
             except publisher.AmbiguousSend as exc:
                 state.pending.pop(item.uid, None)
                 if config.AMBIGUOUS_SEND_POLICY == "retry":
@@ -385,8 +353,7 @@ def cycle(state: State, deadline: float | None = None) -> bool:
                 state.mark(item.uid, item)
                 state.remember_title(item.title)
                 state.remember_title(event_text)
-                state.add_event(item, post, result, event_text, reporters)
-                print(f"Published [{post.kind}{'/' + label if label else ''}{'/silent' if silent else ''}] "
+                print(f"Published [{post.kind}{'/silent' if silent else ''}] "
                       f"internal_source={item.source}: {post.title}")
             state.save()
     finally:
