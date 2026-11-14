@@ -44,7 +44,7 @@ FRESH_START_MAX_AGE_MINUTES = int(_env("FRESH_START_MAX_AGE_MINUTES", "60"))
 DEDUP_WINDOW_HOURS = float(_env("DEDUP_WINDOW_HOURS", "8"))
 # Event-based duplicate rule (works across Persian/English paraphrases): same city + same kind of event
 # (explosion / air-defence / strike ...) within this many minutes = the same event. 0 disables the rule.
-EVENT_DEDUP_MINUTES = int(_env("EVENT_DEDUP_MINUTES", "45"))
+EVENT_DEDUP_MINUTES = int(_env("EVENT_DEDUP_MINUTES", "60"))
 # After this many failed attempts (AI or Telegram) a story is dropped instead of retried forever.
 MAX_FAILS = max(1, int(_env("MAX_FAILS", "5")))
 # Alert the admin after this many consecutive polls in which a source returned nothing usable.
@@ -60,14 +60,40 @@ STATE_FILE = _env("STATE_FILE", "state/seen.json")
 # (any US/Israel + Iran + "said/announced" text). "0" (default) = named officials (Trump, Rubio, Netanyahu...)
 # with any statement verb, and generic US/Israel mentions only when the text is a threat/warning.
 URGENT_ANY_STATEMENT = _env("URGENT_ANY_STATEMENT", "0") == "1"
-# Label live military reports: "⚠️ preliminary, not yet confirmed by a second source", edited to
-# "✅ confirmed by several sources" when a second, different source channel reports the same event.
-SINGLE_SOURCE_LABEL = _env("SINGLE_SOURCE_LABEL", "1") == "1"
 # Non-urgent posts are sent without a phone notification; only breaking / high-impact posts make noise.
 SILENT_NON_URGENT = _env("SILENT_NON_URGENT", "1") == "1"
 # What to do when Telegram may or may not have received a message (read timeout, process killed mid-send):
 # "skip" = never risk a duplicate (default), "retry" = prefer a possible duplicate over a lost story.
 AMBIGUOUS_SEND_POLICY = _env("AMBIGUOUS_SEND_POLICY", "skip").lower()
+
+# Channels whose name is printed at the very end of the news («منبع: ...»). Key = channel id (lower-case),
+# value = the label shown to readers. Every other channel stays anonymous (a named outlet that the news text
+# itself cites, e.g. Reuters, is of course kept).
+CREDITED_SOURCES = {
+    "wfwitness": "wfwitness",
+    "entekhab_ir": "خبرگزاری انتخاب",
+    "eskannews_com": "اسکان نیوز",
+}
+# Source images are re-posted with the news, except for these channels (photos only; videos have their own rule).
+NO_PHOTO_SOURCES = {"iranintltv", "iranintl_tv", "entekhab_ir"}
+# Videos are never re-uploaded from these channels.
+NO_VIDEO_SOURCES = {"iranintltv", "iranintl_tv"}
+# Priority news = a screenshot/image of a statement or tweet by Trump / US officials / Iranian officials,
+# or an image-carrying report of Israeli media. "1" = the post must carry an image to get priority.
+PRIORITY_REQUIRES_PHOTO = _env("PRIORITY_REQUIRES_PHOTO", "1") == "1"
+
+
+def source_key(source: str) -> str:
+    return (source or "").casefold().lstrip("@")
+
+
+def photo_allowed(source: str) -> bool:
+    return source_key(source) not in NO_PHOTO_SOURCES
+
+
+def video_allowed(source: str) -> bool:
+    return source_key(source) not in NO_VIDEO_SOURCES
+
 
 # The only source channels. Add/remove channels here when the owner requests it.
 TELEGRAM_SOURCES = [
