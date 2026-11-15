@@ -49,7 +49,7 @@ def build_html(post: Post, item: Item, body_limit: int | None = None) -> str:
     head = f"🚨 <b>{tag}</b>" if tag == "#خبر_فوری" else f"📰 <b>{tag}</b>"
     # Last gate before publishing: spelling of names/terms (wfwitness translations in particular).
     title = translator.fix_persian_names(post.title or "")
-    parts = [f"{head}\n\n<b>{e(title)}</b>" if title else head]
+    parts = [f"{head}\n\n<b>{e(title)}</b>" if title and not post.hide_title else head]
     if post.translation_unavailable:
         parts.append("⚠️ ترجمه در دسترس نیست؛ متن اصلی منتشر شده است.")
 
