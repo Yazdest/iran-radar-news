@@ -94,7 +94,8 @@ def _clean_emoji(value: str) -> str:
 
 
 _DECORATIVE_LINE_RE = re.compile(r"^\s*(?:[♦◆🔹🔸▪▫◾◽🔻🔺👇👆⬇⬇️⬇️🆔📰📢📣➡️➜➤]+\s*)+$")
-_EMOJI_PREFIX_RE = re.compile(r"^\s*(?:[♦◆🔹🔸▪▫◾◽🔻🔺👇👆⬇⬇️🆔📰📢📣➡️➜➤🚨]+\s*)+")
+# Leading decoration of a source line: any emoji / flag / symbol (⚡️🇮🇷💧🔴…), never letters or digits.
+_EMOJI_PREFIX_RE = re.compile(r"^\s*(?:[♦◆▪▫◾◽➡➜➤\u200d\ufe0f\u2600-\u27bf\u2b00-\u2bff\U0001F000-\U0001FAFF]\s*)+")
 _PROMO_FOOTER_RE = re.compile(r"(?im)^\s*(?:جزئیات\s+در|ادامه\s+در|برای\s+جزئیات|👇+|🆔.*|@RadarIranNews.*)\s*$")
 
 
@@ -104,6 +105,8 @@ def _clean_source_formatting(value: str) -> str:
     for raw_line in (value or "").splitlines():
         line = raw_line.strip()
         if not line or _DECORATIVE_LINE_RE.fullmatch(line):
+            continue
+        if textutil.is_ad_line(line):
             continue
         line = _EMOJI_PREFIX_RE.sub("", line).strip()
         if line.startswith("#"):
@@ -247,6 +250,26 @@ def strip_filler(body: str) -> str:
     return "\n".join(out_lines)
 
 
+_LOOSE_RE = re.compile(r"[\W_]+", re.U)
+
+
+def drop_repeated_title(title: str, body: str) -> str:
+    """A body that only repeats the headline (or starts with it) is cut down to what is really new."""
+    if not body:
+        return ""
+    nt, nb = _LOOSE_RE.sub("", textutil.norm(title)), _LOOSE_RE.sub("", textutil.norm(body))
+    if not nb or not nt:
+        return body
+    if nb == nt or nb in nt:
+        return ""
+    if nb.startswith(nt):
+        stripped = body.lstrip()
+        head = title.strip().rstrip(".،:؛!؟? ")
+        if stripped.startswith(head):
+            return stripped[len(head):].lstrip(" .،:؛!؟?\n-–—")
+    return body
+
+
 def _finish(kind: str, title: str, body: str, impact: str = "normal", source: str = "", emoji: str = "") -> Post:
     kind = kind if kind in KINDS else "news"
     impact = "high" if impact == "high" else "normal"
@@ -256,8 +279,7 @@ def _finish(kind: str, title: str, body: str, impact: str = "normal", source: st
     body = strip_filler(_clean_source_formatting(_fa_digits(_TRAILING_ELLIPSIS_RE.sub("", body))))
     if len(title) > 90:
         title = _fit(title, 90)
-    if body.strip() == title.strip():
-        body = ""
+    body = drop_repeated_title(title, body)
     body = _fit(body, 350 if impact == "high" else 260)
     # All military-development items and US/Israeli official statements about Iran
     # receive the urgent-news treatment requested by the channel owner.
@@ -587,12 +609,12 @@ def _publish_original_if_models_fail(item: Item) -> Post:
     # with an explicit notice; do not fabricate a Persian translation.
     if _is_persian(title + " " + body):
         title = title or _first_sentences(body, 1)[:90]
-        body = body if body and body != title else ""
+        body = drop_repeated_title(title, body)
         kind = "breaking" if config.BREAKING_RE.search(title + " " + body) else "news"
         return Post(kind, title[:240], body[:3500], "normal")
 
     title = title[:240] or _first_sentences(body, 1)[:240]
-    body = body[:3000] if body and body != title else ""
+    body = drop_repeated_title(title, body)[:3000]
     kind = "breaking" if config.BREAKING_RE.search(title + " " + body) else "news"
     return Post(kind, title, body, "normal", "", "", True)
 
