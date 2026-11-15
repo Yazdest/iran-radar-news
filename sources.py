@@ -13,6 +13,7 @@ import requests
 from bs4 import BeautifulSoup
 
 import config
+import textutil
 
 UA = {"User-Agent": "Mozilla/5.0 (compatible; IranRadarNews/3.0)"}
 TIMEOUT = 20
@@ -77,6 +78,8 @@ def scrub_promo(text: str, extra=()) -> str:
         line = raw.strip()
         if not line:
             continue
+        if textutil.is_ad_line(line):
+            continue                        # casino / betting / crypto promo line: never part of the news
         if _SEPARATOR.match(line):
             tail = "\n".join(lines[idx + 1:])
             # Cut the tail only when it looks like a promo footer. The old extra `len(tail) < 200`
