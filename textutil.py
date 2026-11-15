@@ -45,3 +45,25 @@ def places(text: str) -> set[str]:
 def actions(text: str) -> set[str]:
     value = norm(text)
     return {name for name, rx in config.ACTION_PATTERNS if rx.search(value)}
+
+
+# ---- advertising lines (wfwitness and others append casino / betting / crypto promos) -------------------------
+_AD_LINE_RE = re.compile(
+    r"\bcasino\b|\bsportsbook\b|\brainbet\b|\bcrypto\s+(?:casino|betting|gambling)\b|"
+    r"\b(?:non|no)[-\s]?kyc\b|غیر\s*kyc|\bfree\s+spins?\b|\bpromo\s*code\b|\bbetting\s+(?:site|platform|bonus)\b|"
+    r"\bwelcome\s+bonus\b|\bdeposit\s+bonus\b|\bbonus\s+up\s+to\b|\b\d+\s*%\s*bonus\b|\bplay\s+now\b|\bwin\s+big\b|"
+    r"\b(?:use|enter)\s+(?:promo\s+)?code\b|\bsign\s*up\s+(?:now|today|and\s+get)\b|\bprediction\s+market\s+bonus\b|[+＋]\s*(?:18|۱۸)(?!\d)|(?<!\d)(?:18|۱۸)\s*[+＋]|"
+    r"کازینو|شرط[\s\u200c]*بندی|سایت\s+شرط|کد\s*تخفیف|کد\s*پروموشن", re.I)
+# A bare domain («Rainbet.com», «site.io/ref») on a short line is a promo, except well-known news/social hosts.
+_BARE_DOMAIN_RE = re.compile(
+    r"(?<![\w@.])(?!(?:x|twitter|youtube|youtu|t|truthsocial|instagram|facebook|telegram|wikipedia)\.)"
+    r"[a-z0-9][a-z0-9-]{1,30}\.(?:com|io|net|org|bet|gg|me|co|xyz|app|ai|ly|tv|win|club|vip|casino|fun|top)\b", re.I)
+
+
+def is_ad_line(line: str) -> bool:
+    line = (line or "").strip()
+    if not line:
+        return False
+    if _AD_LINE_RE.search(line):
+        return True
+    return len(line) <= 160 and bool(_BARE_DOMAIN_RE.search(line))
