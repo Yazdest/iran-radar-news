@@ -67,3 +67,19 @@ def is_ad_line(line: str) -> bool:
     if _AD_LINE_RE.search(line):
         return True
     return len(line) <= 160 and bool(_BARE_DOMAIN_RE.search(line))
+
+
+def shorten(text: str, cap: int) -> str:
+    """Shorten to at most ~cap characters WITHOUT cutting a word: at a sentence end if there is one,
+    otherwise at a space with «…». (A hard text[:cap] produced titles like «…عربس» + «تان سعودی».)"""
+    text = (text or "").strip()
+    if len(text) <= cap:
+        return text
+    window = text[:cap + 1]
+    cut = max(window.rfind(ch) for ch in ".!؟?؛")
+    if cut >= 40:
+        return text[:cut + 1].rstrip()
+    space = window.rfind(" ")
+    if space >= 40:
+        return text[:space].rstrip(" ،,;:-–—") + "…"
+    return text[:cap]
