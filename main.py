@@ -46,6 +46,7 @@ class State:
         self.pending: dict[str, float] = {}     # uid -> time a send started (still here = outcome unknown)
         self.skips: list[dict] = []             # last stories NOT published and why (review the AI's decisions)
         self.run_skips: list[dict] = []         # same, this run only (job summary)
+        self.last_ai_alert: float = 0.0        # when the admin was last told that the AI rewrite is failing
         self._sigs: dict[str, tuple[frozenset, frozenset]] = {}
         if not self.fresh:
             try:
@@ -57,6 +58,7 @@ class State:
                 self.chan_fail = data.get("chan_fail", {})
                 self.pending = data.get("pending", {})
                 self.skips = data.get("skips", [])
+                self.last_ai_alert = float(data.get("last_ai_alert", 0.0) or 0.0)
                 now = time.time()
                 for entry in data.get("titles", []):
                     if isinstance(entry, str):          # old state format: no timestamp
@@ -162,11 +164,36 @@ class State:
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump({"seen": newest, "titles": titles, "fails": self.fails, "defer": defer,
                        "chan_fail": self.chan_fail, "pending": self.pending,
-                       "skips": self.skips[-300:]}, fh, ensure_ascii=False)
+                       "skips": self.skips[-300:], "last_ai_alert": self.last_ai_alert}, fh, ensure_ascii=False)
         os.replace(tmp, self.path)
 
 
 RETRY = object()
+
+_OUTCOME_FA = {"machine_translation": "منتشر شد با ترجمه ماشینی کوتاه", "original_short": "منتشر شد با خلاصهٔ متن اصلی (بدون بازنویسی)",
+               "retry_later": "منتشر نشد؛ در نوبت تلاش مجدد"}
+
+
+def alert_ai_failures(state: "State") -> bool:
+    """One short Telegram message to the admin when the AI rewrite failed for any story in this run.
+    Rate limited (ADMIN_ALERT_COOLDOWN_MINUTES) so a dead key / exhausted quota is reported, not spammed."""
+    failures, translator.AI_FAILURES[:] = list(translator.AI_FAILURES), []
+    if not failures or not config.ADMIN_CHAT_ID:
+        return False
+    now = time.time()
+    if now - state.last_ai_alert < config.ADMIN_ALERT_COOLDOWN_MINUTES * 60:
+        return False
+    counts = Counter(f["outcome"] for f in failures)
+    lines = [f"⚠️ IRAN RADAR: بازنویسی هوش مصنوعی برای {len(failures)} خبر کار نکرد."]
+    lines += [f"• {_OUTCOME_FA.get(k, k)}: {v}" for k, v in counts.items()]
+    lines.append(f"علت: {failures[0]['note'] or 'نامشخص'}")
+    lines.append("نمونه:")
+    lines += [f"– [{f['source']}] {f['title']}" for f in failures[:4]]
+    lines.append("کلید API / سهمیهٔ Groq و OpenRouter را بررسی کن.")
+    publisher.notify_admin("\n".join(lines))
+    state.last_ai_alert = now
+    state.save()
+    return True
 
 
 def prepare(item: sources.Item):
@@ -219,6 +246,7 @@ def resolve_pending(state: State, stats: Counter) -> None:
 def cycle(state: State, deadline: float | None = None) -> bool:
     now = datetime.now(timezone.utc)
     stats: Counter = Counter()
+    translator.AI_FAILURES.clear()
     translator.GLOBAL_DEADLINE = deadline
     resolve_pending(state, stats)
     items = sources.collect_all()
@@ -361,6 +389,7 @@ def cycle(state: State, deadline: float | None = None) -> bool:
 
     print("CYCLE " + " ".join(f"{k}={v}" for k, v in sorted(stats.items())))
     state.save()
+    alert_ai_failures(state)
     return published_count > 0
 
 
