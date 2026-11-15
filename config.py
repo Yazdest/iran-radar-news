@@ -14,6 +14,8 @@ CHANNEL_JOIN_URL = _env("CHANNEL_JOIN_URL", "https://t.me/RadarIranNews")
 # Optional: chat id of the owner. Receives a short alert when a source channel stops
 # responding or when a story keeps failing to publish. Leave empty to disable alerts.
 ADMIN_CHAT_ID = _env("ADMIN_CHAT_ID")
+# At most one «AI rewrite failed» alert per this many minutes (a dead API key must not message you every run).
+ADMIN_ALERT_COOLDOWN_MINUTES = int(_env("ADMIN_ALERT_COOLDOWN_MINUTES", "30"))
 
 GROQ_API_KEY = _env("GROQ_API_KEY")
 OPENROUTER_API_KEY = _env("OPENROUTER_API_KEY")
