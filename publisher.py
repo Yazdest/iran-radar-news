@@ -65,8 +65,12 @@ def build_html(post: Post, item: Item, body_limit: int | None = None) -> str:
     if credit and credit not in clean_body[-60:]:
         parts.append(f"🔗 منبع: {e(credit)}")
 
-    footer = f"📡 <b>رادار ایران</b> | {e(config.SIGNATURE or '@RadarIranNews')}"
-    return "\n\n".join(parts) + f"\n\n{footer}"
+    # Two empty lines between the news/source and the invitation (as in the original layout).
+    footer = (
+        "برای اطلاع از آخرین اخبار و تحولات، ما را دنبال کنید.\n"
+        f"📡 <b>رادار ایران</b> | {e(config.SIGNATURE or '@RadarIranNews')}"
+    )
+    return "\n\n".join(parts) + f"\n\n\n{footer}"
 
 
 def visible_len(markup: str) -> int:
