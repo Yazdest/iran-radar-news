@@ -27,6 +27,8 @@ class Post:
     source: str = ""         # Persian name of the outlet (when the AI supplied one)
     emoji: str = ""          # one emoji that fits the topic
     translation_unavailable: bool = False
+    hide_title: bool = False  # the title was only a shortened copy of the body (original-text posts): show the body alone
+    degraded: str = ""        # "" = normal AI rewrite | "machine_translation" | "original_short": published without an AI rewrite
 
 
 SYSTEM = """You are the independent Persian-language editor of IRAN RADAR, a fast Telegram news channel.
@@ -262,11 +264,13 @@ def drop_repeated_title(title: str, body: str) -> str:
         return body
     if nb == nt or nb in nt:
         return ""
-    if nb.startswith(nt):
+    if nb.startswith(nt) and not title.rstrip().endswith("…"):
         stripped = body.lstrip()
         head = title.strip().rstrip(".،:؛!؟? ")
-        if stripped.startswith(head):
-            return stripped[len(head):].lstrip(" .،:؛!؟?\n-–—")
+        rest = stripped[len(head):]
+        # only when the headline ends exactly at a word boundary of the body (never mid-word)
+        if stripped.startswith(head) and (not rest or not re.match(r"[\w\u200c]", rest[0])):
+            return rest.lstrip(" .،:؛!؟?\n-–—")
     return body
 
 
@@ -584,39 +588,71 @@ def _first_sentences(text: str, n: int) -> str:
     return " ".join(parts[:n])
 
 
+# Stories whose AI rewrite failed in this run (read by main.alert_ai_failures, which tells the admin).
+AI_FAILURES: list[dict] = []
+
+
+def _record_failure(item: Item, outcome: str, note: str) -> None:
+    AI_FAILURES.append({"source": item.source, "title": (item.title or "")[:120], "outcome": outcome,
+                        "note": config.redact(note)[:240]})
+
+
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!؟?])\s+|\n+")
+
+
+def extract_short(text: str) -> tuple[str, str, bool]:
+    """Model-free short version of a source post (used when every AI engine failed): WHOLE sentences only, nothing
+    invented, nothing cut mid-word. Returns (title, body, hide_title).
+    - one-line / one-sentence source -> headline only;
+    - normal post -> the first sentence as headline + at most two following sentences (~240 chars);
+    - very long opening sentence -> shown alone as the text (no repeated headline)."""
+    clean = _clean_source_formatting(text or "")
+    sentences = [s.strip() for s in _SENTENCE_SPLIT_RE.split(re.sub(r"[ \t]+", " ", clean)) if s.strip()]
+    if not sentences:
+        return "", "", False
+    first = sentences[0]
+    if len(first) > 150:
+        return textutil.shorten(first, 150), textutil.shorten(first, 400), True
+    body, used = "", 0
+    for sentence in sentences[1:]:
+        if used >= 2 or len(body) + len(sentence) > 240:
+            break
+        body = f"{body} {sentence}".strip()
+        used += 1
+    return first.rstrip("."), body, False
+
+
 def _fallback(item: Item) -> Post:
     # Machine translation can translate source facts, but cannot safely add missing editorial context.
     if not item.text or len(item.text.strip()) < 15:
         raise TranslationUnavailable("source excerpt too short to translate")
-    title = _translate_with_fallback(item.title)
-    body = _translate_with_fallback(item.text) if item.text and item.text != item.title else ""
-    if item.origin == "telegram" and body.startswith(title[:30]):
-        body = body[len(title):].lstrip(" \n:،.") if len(body) > len(title) else ""
+    # Short version first (whole sentences), THEN translate only that: a long report is no longer dumped in full.
+    title_src, body_src, hide = extract_short(item.text or item.title)
+    if not title_src:
+        raise TranslationUnavailable("nothing to translate")
     kind = "breaking" if config.BREAKING_RE.search(f"{item.title} {item.text}") else "news"
-    # Do not trim fallback output to two sentences: this was silently removing facts
-    # from longer source reports and leaving some translations incomplete.
+    if hide:
+        post = _finish(kind, _translate_with_fallback(body_src), "", source=item.source)
+        full = post.title
+        post.title, post.body, post.hide_title = textutil.shorten(full, 150), full, True
+        return post
+    title = _translate_with_fallback(title_src)
+    body = _translate_with_fallback(body_src) if body_src else ""
     return _finish(kind, title, body, source=item.source)
 
 
 def _publish_original_if_models_fail(item: Item) -> Post:
-    """Never lose a relevant item solely because all rewrite/translation APIs failed."""
-    title = _clean_source_formatting(item.title or "")
-    body = _clean_source_formatting(item.text or "")
-    if not title and not body:
+    """Never lose a relevant item solely because all rewrite/translation APIs failed. The source text is published
+    in a SHORT form (extract_short: whole sentences only), not dumped in full. Persian sources go out as they are;
+    English ones stay English with an explicit notice (no invented translation)."""
+    title_src, body_src, hide = extract_short(item.text or item.title)
+    if not title_src:
+        title_src = textutil.shorten(_clean_source_formatting(item.title or ""), 150)
+    if not title_src:
         raise TranslationUnavailable("source item is empty")
-
-    # Persian sources can be published as-is. English WFWitness posts remain in English
-    # with an explicit notice; do not fabricate a Persian translation.
-    if _is_persian(title + " " + body):
-        title = title or _first_sentences(body, 1)[:90]
-        body = drop_repeated_title(title, body)
-        kind = "breaking" if config.BREAKING_RE.search(title + " " + body) else "news"
-        return Post(kind, title[:240], body[:3500], "normal")
-
-    title = title[:240] or _first_sentences(body, 1)[:240]
-    body = drop_repeated_title(title, body)[:3000]
-    kind = "breaking" if config.BREAKING_RE.search(title + " " + body) else "news"
-    return Post(kind, title, body, "normal", "", "", True)
+    kind = "breaking" if config.BREAKING_RE.search(f"{item.title} {item.text}") else "news"
+    persian = _is_persian(f"{item.title} {item.text}")
+    return Post(kind, title_src, body_src, "normal", "", "", not persian, hide_title=hide, degraded="original_short")
 
 
 # Priority news: tweet / statement screenshots of Trump, US officials, Iranian officials, and Israeli media reports.
@@ -691,13 +727,20 @@ def make_post(item: Item) -> Post | None:
 
     if config.ALLOW_FALLBACK and not _is_persian(_item_text(item)) and not _budget_exhausted(until):
         try:
-            return _fallback(item)
+            post = _fallback(item)
+            post.degraded = "machine_translation"
+            _record_failure(item, "machine_translation", "; ".join(errors) or "AI rewrite failed")
+            return post
         except Exception as exc:
             errors.append(f"translation fallback: {exc}")
             print(f"WARN translation fallback failed ({exc})", file=sys.stderr)
 
+    note = "; ".join(errors) or ("no AI engine configured" if not engines else "AI rewrite failed")
     if not engines or is_urgent_item(item):
-        # No AI configured, or urgent news that must not wait: publish the source text.
-        print("WARN publishing original source text. " + "; ".join(errors), file=sys.stderr)
-        return _publish_original_if_models_fail(item)
-    raise TranslationUnavailable("all rewrite engines failed: " + "; ".join(errors))
+        # No AI configured, or urgent news that must not wait: publish a short form of the source text.
+        print("WARN publishing short original source text. " + note, file=sys.stderr)
+        post = _publish_original_if_models_fail(item)
+        _record_failure(item, "original_short", note)
+        return post
+    _record_failure(item, "retry_later", note)
+    raise TranslationUnavailable("all rewrite engines failed: " + note)
