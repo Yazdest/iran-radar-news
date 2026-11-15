@@ -140,8 +140,8 @@ def make_title(text: str) -> str:
     for line in lines:
         cleaned = _LEAD_DECOR.sub("", line).strip()
         if len(cleaned) >= 8:
-            return cleaned[:240]
-    return (_LEAD_DECOR.sub("", lines[0]).strip() if lines else text)[:240] or text[:240]
+            return textutil.shorten(cleaned, 240)
+    return textutil.shorten((_LEAD_DECOR.sub("", lines[0]).strip() if lines else text) or text, 240)
 
 
 def collect_telegram(src: dict) -> list[Item]:
