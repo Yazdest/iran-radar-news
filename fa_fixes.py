@@ -67,6 +67,8 @@ PAIRS: list[tuple[str, str]] = [
     (r"غنی" + _SP + "سازی", "غنی‌سازی"),
     (r"غنی" + _SP + "شده", "غنی‌شده"),
     (r"هسته" + _S + r"ای|هسته" + _S + "یی", "هسته‌ای"),
+    (r"رییس", "رئیس"),
+    (r"مسوول|مسول", "مسئول"),
     (r"سپاه" + _SP + "سپاه", "سپاه"),          # keep last: «سپاه گارد انقلاب» -> «سپاه سپاه پاسداران» -> «سپاه پاسداران»
 ]
 _PAIR_RES = [
@@ -93,6 +95,47 @@ _ZWNJ_RULES = [
     (re.compile(rf"(?<=[آادذرزژو]) (ها|های|ای|ترین)(?![{_L}])"), "\\1"),
     (re.compile(rf"(?<=[{_L}]) (ها|های|ای|ترین)(?![{_L}])"), "\u200c\\1"),
 ]
+# Verb forms that do not exist in Persian (a model/MT builds them from the transitive stem «سوزاندن»):
+# «سوزیدند» -> «سوختند». (The transitive «سوزاندند» = "they burned (something)" is correct and is left alone.)
+_BURN_RE = re.compile(rf"(?<![{_L}])((?:ن?می[\s\u200c]*)?)سوزید(ند|م|ی|یم|ید|ه|ن)?(?![{_L}])")
+_BURN_ENDINGS = {None: "سوخت", "": "سوخت", "ند": "سوختند", "م": "سوختم", "ی": "سوختی", "یم": "سوختیم",
+                 "ید": "سوختید", "ه": "سوخته", "ن": "سوختن"}
+
+
+def _fix_burn(match: "re.Match[str]") -> str:
+    return match.group(1) + _BURN_ENDINGS.get(match.group(2) or "", "سوخت")
+
+
+# «منفجرید» «غرقیدند» «نابودید» ...: a model/MT glues the past-tense ending «-ید» to a noun/adjective. Persian says
+# «منفجر شد», «غرق شدند». (Only stems listed here are touched, so real verbs such as «ترکید» stay as they are.)
+_PASSIVE_STEMS = "منفجر|غرق|نابود|مجروح|منهدم|ویران|مصدوم|متوقف|سرنگون|هلاک|مختل|متلاشی|مسدود|تخریب"
+_COINED_RE = re.compile(rf"(?<![{_L}])((?:ن?می[\s\u200c]*)?)({_PASSIVE_STEMS})ید(ند|م|ی|یم|ید|ه|ن)?(?![{_L}])")
+_SHOD = {"": "شد", "ند": "شدند", "م": "شدم", "ی": "شدی", "یم": "شدیم", "ید": "شدید", "ه": "شده", "ن": "شدن"}
+
+
+def _fix_coined(match: "re.Match[str]") -> str:
+    prefix = re.sub(r"[\s\u200c]+", "", match.group(1) or "")
+    ending = match.group(3) or ""
+    verb = _SHOD[ending]
+    if prefix and ending not in ("ه", "ن"):
+        verb = prefix + "\u200c" + verb
+    return f"{match.group(2)} {verb}"
+
+
+# Other typical machine-translation slips (word -> correct wording), regex + replacement.
+_MISC: list[tuple["re.Pattern[str]", str]] = [
+    (re.compile(rf"(?<![{_L}])آتش[\s\u200c]*گرفت(?=(?:ند|م|ی|یم|ید|ه)?(?![{_L}]))"), "آتش گرفت"),
+    (re.compile(rf"(?<![{_L}])حمله[\s\u200c]+کرده[\s\u200c]+شد(ند)?(?![{_L}])"), lambda m: "مورد حمله قرار گرفت" + ("ند" if m.group(1) else "")),
+    (re.compile(rf"(?<![{_L}])مورد[\s\u200c]+حمله[\s\u200c]+قرار[\s\u200c]+داده[\s\u200c]+شد(ند)?(?![{_L}])"),
+     lambda m: "مورد حمله قرار گرفت" + ("ند" if m.group(1) else "")),
+    (re.compile(rf"(?<![{_L}])(شلیک|پرتاب|اصابت)[\s\u200c]+کرده[\s\u200c]+شد(ند)?(?![{_L}])"), lambda m: f"{m.group(1)} شد" + ("ند" if m.group(2) else "")),
+    (re.compile(rf"(?<![{_L}])انفجار[\s\u200c]+(کرد|کردند)(?![{_L}])"), lambda m: "منفجر " + ("شدند" if m.group(1) == "کردند" else "شد")),
+    (re.compile(rf"(?<=ا)ئی(?![{_L}])"), "یی"),                       # دریائی -> دریایی، هوائی -> هوایی
+    (re.compile(rf"(?<![{_L}])غیر[\s]+(قانونی|رسمی|نظامی|مجاز|مستقیم|منتظره|علنی|عادی|فعال)(?![{_L}])"), r"غیر\1"),
+    (re.compile(rf"(?<![{_L}])(نمی|می)(?=(?:تواند|توانند|شود|شوند|کند|کنند|گوید|گویند|رود|روند|آید|آیند|دهد|دهند|خواهد|"
+                rf"خواهند|دانند|دارد|دارند|کرد|کردند|شد|شدند|گفت|گفتند)(?![{_L}]))"), "\\g<0>\u200c"),
+]
+
 _JASK_RE = re.compile(rf"(?<![{_L}])جسک(?![{_L}])")      # strict: no suffix («جسکی‌ها» stays as it is)
 
 
@@ -106,7 +149,11 @@ def fix(text: str) -> str:
         return text
     text = _VOWEL_MARKS_RE.sub("", text.translate(_ARABIC_LETTERS).translate(_ARABIC_DIGITS))
     text = _JASK_RE.sub("جاسک", text)
+    text = _BURN_RE.sub(_fix_burn, text)
+    text = _COINED_RE.sub(_fix_coined, text)
     for rx, right in _PAIR_RES:
+        text = rx.sub(right, text)
+    for rx, right in _MISC:
         text = rx.sub(right, text)
     for rx, right in _ZWNJ_RULES:
         text = rx.sub(right, text)
